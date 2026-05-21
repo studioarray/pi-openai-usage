@@ -6,7 +6,13 @@ import { describe, expect, it, vi } from "vitest";
 
 import piOpenAIUsage from "../index";
 import { resolveCodexOAuthCredentials, type CodexCredentialResolution } from "../src/auth";
-import { DEFAULT_USAGE_CONFIG, type LoadedUsageConfig, type UsageConfig } from "../src/config";
+import {
+  CONFIG_BASENAME,
+  DEFAULT_USAGE_CONFIG,
+  loadUsageConfig,
+  type LoadedUsageConfig,
+  type UsageConfig,
+} from "../src/config";
 import type { UsageClientPort, UsageFetchError, UsageFetchResult } from "../src/usage-client";
 import { createUsageStateStore, type UsageStateStore } from "../src/usage-state";
 import { createUsageRefreshCoordinator } from "../src/usage-refresh-coordinator";
@@ -15,6 +21,7 @@ import {
   type TimerApi,
   type UsageStatusControllerDependencies,
 } from "../src/status-controller";
+import { registerOpenAIUsageSettingsCommand } from "../src/usage-settings";
 
 type RegisteredHandler = (event: { type: string }, ctx: FakeExtensionContext) => unknown;
 
@@ -354,6 +361,114 @@ describe("usage status controller", () => {
       } else {
         process.env.PI_CODING_AGENT_DIR = previousAgentDir;
       }
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reapplies hide-label menu writes through the shared status path without changing usage semantics", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-openai-usage-status-regression-"));
+    const cwd = join(root, "project");
+    const home = join(root, "home");
+    const handlers = new Map<string, RegisteredHandler[]>();
+    let settingsCommand: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
+
+    try {
+      const configPath = join(cwd, ".pi", "extensions", CONFIG_BASENAME);
+      mkdirSync(join(cwd, ".pi", "extensions"), { recursive: true });
+      mkdirSync(home, { recursive: true });
+      writeFileSync(
+        configPath,
+        `${JSON.stringify({ ...DEFAULT_USAGE_CONFIG, display: { ...DEFAULT_USAGE_CONFIG.display, showLabel: true } }, null, 2)}\n`,
+        "utf8",
+      );
+
+      const usageState = createUsageStateStore();
+      const usageClient = {
+        fetchUsage: vi.fn(async () => successfulUsageFetchResult(rawUsageResponse())),
+      } satisfies UsageClientPort;
+      const usageRefreshCoordinator = createUsageRefreshCoordinator({
+        usageClient,
+        usageState,
+        now: () => new Date("2026-01-01T00:00:00.000Z"),
+      });
+      const loadConfig = () => loadUsageConfig({ cwd, home });
+      const resolveCredentials = async () => successfulCredentialResolution();
+      const timerApi = {
+        setInterval: vi.fn((_handler: () => void, _delayMs: number): unknown => ({ id: "refresh" })),
+        clearInterval: vi.fn((_handle: unknown) => undefined),
+      };
+      const pi = {
+        on(eventName: string, handler: RegisteredHandler) {
+          const eventHandlers = handlers.get(eventName) ?? [];
+          eventHandlers.push(handler);
+          handlers.set(eventName, eventHandlers);
+        },
+        registerCommand(name: string, definition: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> }) {
+          if (name === "openai-usage-settings") settingsCommand = definition.handler;
+        },
+      } as unknown as ExtensionAPI;
+      const statusController = registerUsageStatusController(pi, {
+        loadConfig,
+        resolveCredentials,
+        usageClient,
+        usageState,
+        usageRefreshCoordinator,
+        timerApi,
+      });
+      registerOpenAIUsageSettingsCommand(pi, {
+        loadConfig,
+        resolveCredentials,
+        usageClient,
+        usageState,
+        usageRefreshCoordinator,
+        reapplyStatusLine: (ctx) => statusController.reapply(ctx),
+      });
+
+      const custom = vi.fn(async (factory: Parameters<ExtensionCommandContext["ui"]["custom"]>[0]) => {
+        const component = await factory({} as never, {} as never, {} as never, () => undefined);
+        for (let rowIndex = 0; rowIndex < 9; rowIndex += 1) {
+          component.handleInput?.("\x1b[B");
+        }
+        component.handleInput?.("\r");
+        return undefined;
+      });
+      const ctx = {
+        hasUI: true,
+        model: { provider: "openai", id: "any-openai-model" },
+        modelRegistry: {
+          isUsingOAuth: vi.fn(() => true),
+          getApiKeyForProvider: vi.fn(async () => undefined),
+        },
+        signal: undefined,
+        ui: {
+          notify: vi.fn(),
+          setStatus: vi.fn(),
+          setFooter: vi.fn(),
+          custom,
+        },
+      } as unknown as FakeExtensionContext & ExtensionCommandContext;
+
+      for (const handler of handlers.get("session_start") ?? []) {
+        await handler({ type: "session_start" }, ctx);
+      }
+      expect(ctx.ui.setStatus).toHaveBeenLastCalledWith(
+        "openai-usage",
+        "Usage: 5h ████████▉░ 88% | 7d █████▋░░░░ 56% | 5h ↺ 5m | 7d ↺ 10m",
+      );
+
+      await settingsCommand?.("", ctx);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(JSON.parse(readFileSync(configPath, "utf8")) as unknown).toMatchObject({
+        display: { showLabel: false },
+      });
+      expect(usageClient.fetchUsage).toHaveBeenCalledTimes(1);
+      expect(ctx.ui.setStatus).toHaveBeenLastCalledWith(
+        "openai-usage",
+        "5h ████████▉░ 88% | 7d █████▋░░░░ 56% | 5h ↺ 5m | 7d ↺ 10m",
+      );
+    } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
