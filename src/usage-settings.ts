@@ -41,11 +41,11 @@ import {
 } from "./usage-refresh-coordinator";
 import {
   fetchCodexUsage,
-  USAGE_ENDPOINT,
   type UsageClientPort,
   type UsageFetchError,
 } from "./usage-client";
 import { type UsageStateStore, createUsageStateStore } from "./usage-state";
+import { formatDiagnosticsReport } from "./diagnostics-reporter";
 
 type UsageSettingsCommandContext = Pick<
   ExtensionCommandContext,
@@ -161,10 +161,6 @@ async function handleShowSettings(options: {
 }): Promise<void> {
   const { commandContext, loadConfig, resolveCredentials, usageState } = options;
   const pickerAction = await selectSettingsPickerAction(commandContext);
-  if (pickerAction === "diagnostics") {
-    await handleDiagnostics({ commandContext, loadConfig, resolveCredentials, usageState });
-    return;
-  }
   if (pickerAction === "help") {
     notify(commandContext, usageSettingsHelpText());
     return;
@@ -173,24 +169,22 @@ async function handleShowSettings(options: {
   const loaded = loadConfig();
   const credentials = await resolveCredentials(commandContext);
   const health = resolveOperationalHealth(credentials, usageState);
-  const lines = formatSettingsOutput(loaded.effective, loaded, credentials, health, usageState);
+  const lines = formatSettingsOutput(loaded.effective, health, usageState);
   notify(commandContext, lines.join("\n"));
 }
 
 async function selectSettingsPickerAction(
   commandContext: UsageSettingsCommandContext,
-): Promise<"show" | "diagnostics" | "help"> {
+): Promise<"show" | "help"> {
   if (!commandContext.hasUI || typeof commandContext.ui.select !== "function") {
     return "show";
   }
 
   const choice = await commandContext.ui.select("openai-usage settings", [
     "Show settings",
-    "Diagnostics",
     "Help",
   ]);
 
-  if (choice === "Diagnostics") return "diagnostics";
   if (choice === "Help") return "help";
   return "show";
 }
@@ -206,10 +200,12 @@ async function handleDiagnostics(options: {
   const credentials = await resolveCredentials(commandContext);
   notify(
     commandContext,
-    [
-      "openai-usage diagnostics",
-      ...formatDiagnosticsLines({ loaded, credentials, usageState }),
-    ].join("\n"),
+    formatDiagnosticsReport({
+      loaded,
+      credentials,
+      usageState,
+      runtime: commandContext,
+    }),
   );
 }
 
@@ -246,7 +242,7 @@ async function handleSettingsSet(options: {
   const lines = [
     `Updated setting: ${key} = ${rawValue}`,
     "",
-    ...formatSettingsOutput(updated.effective, updated, credentials, health, usageState),
+    ...formatSettingsOutput(updated.effective, health, usageState),
   ];
   notify(commandContext, lines.join("\n"));
   return true;
@@ -1006,8 +1002,6 @@ function resolveOperationalHealth(
 
 function formatSettingsOutput(
   config: UsageConfig,
-  loaded: LoadedUsageConfig,
-  credentials: CodexCredentialResolution,
   health: OperationalHealth,
   usageState: UsageStateStore,
 ): string[] {
@@ -1043,38 +1037,7 @@ function formatSettingsOutput(
     `  colors.target: ${config.colors.target}`,
     `  colors.barGradient.enabled: ${formatBooleanText(config.colors.barGradient.enabled)}`,
     `  colors.barGradient.direction: ${config.colors.barGradient.direction}`,
-    "",
-    ...formatDiagnosticsLines({ loaded, credentials, usageState }),
   ];
-}
-
-function formatDiagnosticsLines(options: {
-  loaded: LoadedUsageConfig;
-  credentials: CodexCredentialResolution;
-  usageState: UsageStateStore;
-}): string[] {
-  const { loaded, credentials, usageState } = options;
-  const lines = [
-    "Diagnostics:",
-    `  Config path: ${loaded.configPath}`,
-    `  Project config path: ${loaded.projectConfigPath}`,
-    `  Global config path: ${loaded.globalConfigPath}`,
-    `  Project config exists: ${formatBooleanText(loaded.projectConfigExists)}`,
-    `  Global config exists: ${formatBooleanText(loaded.globalConfigExists)}`,
-    `  Endpoint: ${USAGE_ENDPOINT}`,
-    `  Last fetch: ${formatDateTime(usageState.getLastAttemptAt())}`,
-    `  Last success: ${formatDateTime(usageState.getLastSuccessAt())}`,
-    `  Last error: ${formatLastError(usageState.getLastError())}`,
-    `  Auth source: ${credentials.diagnostics.source}`,
-    `  Checked auth sources: ${credentials.diagnostics.checkedSources.join(", ") || "<none>"}`,
-    `  Has access token: ${formatBooleanText(credentials.diagnostics.hasAccessToken)}`,
-    `  Has account ID: ${formatBooleanText(credentials.diagnostics.hasAccountId)}`,
-    `  Account ID: ${credentials.diagnostics.accountId ?? "<redacted or missing>"}`,
-    ...formatJsonBlock("  Raw project config:", loaded.raw.project),
-    ...formatJsonBlock("  Raw global config:", loaded.raw.global),
-  ];
-
-  return lines;
 }
 
 function formatCurrentErrorLines(error: UsageFetchError | undefined): string[] {
@@ -1213,19 +1176,6 @@ function stripQuotes(value: string): string {
 
 function formatDateTime(value: Date | undefined): string {
   return value === undefined ? "<none>" : value.toISOString();
-}
-
-function formatJsonBlock(label: string, value: Record<string, unknown>): string[] {
-  const lines = JSON.stringify(value, null, 2).split("\n");
-  return [label, ...lines.map((line) => `  ${line}`)];
-}
-
-function formatLastError(error: UsageFetchError | undefined): string {
-  if (error === undefined) return "<none>";
-  if (error.status === undefined) {
-    return `${error.kind}: ${error.message}`;
-  }
-  return `${error.kind} (${error.status}): ${error.message}`;
 }
 
 function formatBooleanText(value: boolean): string {

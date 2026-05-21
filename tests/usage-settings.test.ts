@@ -561,21 +561,24 @@ describe("usage settings command", () => {
     expect(text).toContain("widgets.fiveHour.mode:");
     expect(text).toContain("bar.style:");
     expect(text).toContain("colors.scheme:");
-    expect(text).toContain("Diagnostics:");
-    expect(text).toContain("Config path:");
+    expect(text).not.toContain("Raw project config:");
+    expect(text).not.toContain("Raw global config:");
   });
 
-  it("opens a minimal interactive settings picker when UI selection is available", async () => {
-    const select = vi.fn(async () => "Diagnostics");
+  it("does not expose diagnostics from the interactive settings picker", async () => {
+    const select = vi.fn<(title: string, options: string[]) => Promise<string | undefined>>(
+      async () => "Show settings",
+    );
     const { command, ctx } = createSettingsHarness({ hasUI: true, select });
 
     await command("", ctx);
 
-    expect(select).toHaveBeenCalledWith(
-      "openai-usage settings",
-      expect.arrayContaining(["Show settings", "Diagnostics", "Help"]),
-    );
-    expect(lastNotifyText(ctx)).toContain("openai-usage diagnostics");
+    const options = select.mock.calls.at(-1)?.[1] ?? [];
+    expect(select).toHaveBeenCalledWith("openai-usage settings", expect.any(Array));
+    expect(options).toContain("Show settings");
+    expect(options).toContain("Help");
+    expect(options).not.toContain("Diagnostics");
+    expect(lastNotifyText(ctx)).toContain("openai-usage settings");
   });
 
   it("help text does not expose fast-mode controls", async () => {
@@ -610,8 +613,8 @@ describe("usage settings command", () => {
     const text = lastNotifyText(ctx);
     expect(text).toContain("status: SETUP");
     expect(text).toContain("/login openai-codex");
-    expect(text).toContain("Auth source: none");
-    expect(text).toContain("Checked auth sources:");
+    expect(text).not.toContain("Auth source: none");
+    expect(text).not.toContain("Raw project config:");
   });
 
   it("updates a common setting and preserves unknown config fields", async () => {
@@ -802,27 +805,113 @@ describe("usage settings command", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it("diagnostics include raw config snapshots and config paths", async () => {
+  it("diagnostics include required runtime/config/auth/raw-config data and redact secrets", async () => {
     const { cwd, home, root } = createTempProject();
     const projectConfigPath = join(cwd, ".pi", "extensions", CONFIG_BASENAME);
+    const globalConfigPath = join(home, ".pi", "agent", "extensions", CONFIG_BASENAME);
+    writeJson(globalConfigPath, {
+      enabled: true,
+      refreshIntervalMs: 120_000,
+      globalOnly: {
+        apiKey: "global-api-key-secret",
+        note: "keep-global",
+      },
+    });
     writeJson(projectConfigPath, {
       ...DEFAULT_USAGE_CONFIG,
+      enabled: false,
+      refreshIntervalMs: 300_000,
       diagnostic: "test",
+      accessToken: "project-access-token-secret",
+      nested: {
+        refresh_token: "project-refresh-token-secret",
+        unknownValue: "Bearer project-bearer-token-value",
+        apiKey: "sk-proj-projectsecret1234567890",
+        array: [
+          "plain-value",
+          "ghp_projecttoken1234567890",
+          { authorization: "Bearer nested-token-abcdef123456" },
+        ],
+      },
     });
+    const usageState = createUsageStateStore();
+    usageState.storeSnapshot(
+      {
+        fiveHourLeftPercent: 88,
+        sevenDayLeftPercent: 44,
+        fiveHourResetInSeconds: 300,
+        sevenDayResetInSeconds: 600,
+        isLimited: false,
+      },
+      new Date("2026-01-01T00:00:00.000Z"),
+    );
+    usageState.recordFetchError(
+      {
+        kind: "network",
+        status: 503,
+        message: "failed with Bearer runtime-bearer-token-value",
+      },
+      new Date("2026-01-01T00:00:10.000Z"),
+    );
 
     const { command, ctx } = createSettingsHarness({
       loadConfig: () => loadUsageConfig({ cwd, home }),
+      usageState,
     });
 
     await command("diagnostics", ctx);
 
     const text = lastNotifyText(ctx);
     expect(text).toContain("openai-usage diagnostics");
-    expect(text).toContain("Raw project config:");
-    expect(text).toContain('"diagnostic": "test"');
     expect(text).toContain(`Config path: ${projectConfigPath}`);
+    expect(text).toContain(`Project config path: ${projectConfigPath}`);
+    expect(text).toContain(`Global config path: ${globalConfigPath}`);
+    expect(text).toContain("Project config exists: yes");
+    expect(text).toContain("Global config exists: yes");
+    expect(text).toContain("Endpoint:");
+    expect(text).toContain("Runtime:");
+    expect(text).toContain("Model ID: any-openai-model");
+    expect(text).toContain("Last fetch: 2026-01-01T00:00:10.000Z");
+    expect(text).toContain("Last success: 2026-01-01T00:00:00.000Z");
+    expect(text).toContain("Last error: network (503): failed with Bearer <redacted>");
+    expect(text).toContain("Auth source: registry");
+    expect(text).toContain("Checked auth sources: registry");
+    expect(text).toContain("Has access token: yes");
+    expect(text).toContain("Has account ID: yes");
+    expect(text).toContain("Credential source: registry");
+    expect(text).toContain("Effective enabled: no");
+    expect(text).toContain("Effective refresh interval (ms): 300000");
+    expect(text).toContain("Raw project config:");
+    expect(text).toContain("Raw global config:");
+    expect(text).toContain('"diagnostic": "test"');
+    expect(text).toContain('"note": "keep-global"');
+    expect(text).toContain('"plain-value"');
+    expect(text).toContain("<redacted>");
+    expect(text).not.toContain("project-access-token-secret");
+    expect(text).not.toContain("project-refresh-token-secret");
+    expect(text).not.toContain("project-bearer-token-value");
+    expect(text).not.toContain("sk-proj-projectsecret1234567890");
+    expect(text).not.toContain("ghp_projecttoken1234567890");
+    expect(text).not.toContain("nested-token-abcdef123456");
+    expect(text).not.toContain("global-api-key-secret");
+    expect(text).not.toContain("runtime-bearer-token-value");
+    expect(text).not.toContain("test-codex-token");
 
     rmSync(root, { recursive: true, force: true });
+  });
+
+  it("diagnostics include setup guidance when credentials are missing", async () => {
+    const { command, ctx } = createSettingsHarness({
+      resolveCredentials: async () => failedCredentialResolution(),
+    });
+
+    await command("diagnostics", ctx);
+
+    const text = lastNotifyText(ctx);
+    expect(text).toContain("Credential error: Missing openai-codex OAuth credentials. Run /login openai-codex.");
+    expect(text).toContain("Checked auth sources: registry, auth_file");
+    expect(text).toContain("Has access token: no");
+    expect(text).toContain("Has account ID: no");
   });
 
   it("rejects invalid advanced JSON payloads", async () => {
