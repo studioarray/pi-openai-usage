@@ -170,7 +170,7 @@ function createSettingsHarness(options: {
   usageState?: UsageStateStore;
   now?: () => Date;
   hasUI?: boolean;
-  select?: ReturnType<typeof vi.fn<(title: string, options: string[]) => Promise<string | undefined>>>;
+  custom?: ExtensionCommandContext["ui"]["custom"];
 } = {}): SettingsHarness {
   let command: RegisteredCommand | undefined;
   let getArgumentCompletions: ArgumentCompletionProvider | undefined;
@@ -211,7 +211,7 @@ function createSettingsHarness(options: {
     hasUI: options.hasUI ?? false,
     ui: {
       notify: vi.fn(),
-      ...(options.select === undefined ? {} : { select: options.select }),
+      ...(options.custom === undefined ? {} : { custom: options.custom }),
     },
     model: { provider: "openai", id: "any-openai-model" },
     signal: undefined,
@@ -575,20 +575,84 @@ describe("usage settings command", () => {
     expect(resolveCredentials).not.toHaveBeenCalled();
   });
 
-  it("does not expose diagnostics from the interactive settings picker", async () => {
-    const select = vi.fn<(title: string, options: string[]) => Promise<string | undefined>>(
-      async () => "Show settings",
-    );
-    const { command, ctx } = createSettingsHarness({ hasUI: true, select });
+  it("opens a SettingsList with exactly the approved rows for no-args UI", async () => {
+    let capturedRows: Array<{ label: string }> = [];
+    const custom = vi.fn(async (factory: Parameters<ExtensionCommandContext["ui"]["custom"]>[0]) => {
+      const component = await factory({} as never, {} as never, {} as never, () => undefined);
+      capturedRows = (component as { items?: Array<{ label: string }> }).items ?? [];
+      return undefined;
+    });
+    const { command, ctx } = createSettingsHarness({
+      hasUI: true,
+      custom: custom as ExtensionCommandContext["ui"]["custom"],
+    });
 
     await command("", ctx);
 
-    const options = select.mock.calls.at(-1)?.[1] ?? [];
-    expect(select).toHaveBeenCalledWith("openai-usage settings", expect.any(Array));
-    expect(options).toContain("Show settings");
-    expect(options).toContain("Help");
-    expect(options).not.toContain("Diagnostics");
-    expect(lastNotifyText(ctx)).toContain("openai-usage settings");
+    expect(custom).toHaveBeenCalledTimes(1);
+    const rowLabels = capturedRows.map((row) => row.label);
+    expect(rowLabels).toEqual([
+      "Display",
+      "Color scheme",
+      "Bar style",
+      "Bar width",
+      "5h display",
+      "7d display",
+      "5h reset display",
+      "7d reset display",
+      "Refresh interval",
+      "Hide label",
+    ]);
+    const normalizedRowLabels = rowLabels.map((label) => label.toLowerCase());
+    expect(normalizedRowLabels).not.toEqual(
+      expect.arrayContaining([
+        "help",
+        "refresh now",
+        "show current usage",
+        "diagnostics",
+        "json editor",
+        "json editors",
+        "raw config",
+        "label text",
+        "separator",
+        "partial bars",
+        "color target",
+        "gradient",
+        "gradients",
+      ]),
+    );
+    expect(lastNotifyText(ctx)).toBe("");
+  });
+
+  it("leaves config untouched when the interactive menu is cancelled", async () => {
+    const { cwd, home, root } = createTempProject();
+    const projectConfigPath = join(cwd, ".pi", "extensions", CONFIG_BASENAME);
+    const initialConfig = {
+      enabled: true,
+      display: { label: "Keep me", separator: " · ", showLabel: true },
+      futureTopLevel: { keep: true },
+    };
+    writeJson(projectConfigPath, initialConfig);
+    let cancelDoneCalled = false;
+    const custom = vi.fn(async (factory: Parameters<ExtensionCommandContext["ui"]["custom"]>[0]) => {
+      const component = await factory({} as never, {} as never, {} as never, () => {
+        cancelDoneCalled = true;
+      });
+      component.handleInput?.("\x1b");
+      return undefined;
+    });
+    const { command, ctx } = createSettingsHarness({
+      hasUI: true,
+      loadConfig: () => loadUsageConfig({ cwd, home }),
+      custom: custom as ExtensionCommandContext["ui"]["custom"],
+    });
+
+    await command("", ctx);
+
+    expect(cancelDoneCalled).toBe(true);
+    expect(JSON.parse(readFileSync(projectConfigPath, "utf8")) as unknown).toEqual(initialConfig);
+
+    rmSync(root, { recursive: true, force: true });
   });
 
   it("help describes the one-command surface", async () => {
