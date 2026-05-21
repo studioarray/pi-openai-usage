@@ -13,7 +13,9 @@ import type {
 
 import {
   type LoadedUsageConfig,
+  type UsageConfigPatch,
   loadUsageConfig,
+  patchUsageConfig,
 } from "./config";
 import { resolveCodexOAuthCredentials, type CodexCredentialResolution } from "./auth";
 import { createUsageCommandFacade } from "./usage-command-facade";
@@ -34,6 +36,10 @@ type UsageSettingsCommandContext = Pick<
   "ui" | "model" | "modelRegistry" | "signal" | "hasUI"
 >;
 
+type ConfigPatchWriter = (configPath: string, patch: UsageConfigPatch) => void;
+type ConfigChangedCallback = (ctx: UsageSettingsCommandContext) => void | Promise<void>;
+type StatusLineReapplyCallback = (ctx: UsageSettingsCommandContext) => void | Promise<void>;
+
 type UsageSettingsCommandDependencies = {
   loadConfig?: () => LoadedUsageConfig;
   resolveCredentials?: (
@@ -42,6 +48,9 @@ type UsageSettingsCommandDependencies = {
   usageClient?: UsageClientPort;
   usageState?: UsageStateStore;
   usageRefreshCoordinator?: UsageRefreshCoordinator;
+  patchConfig?: ConfigPatchWriter;
+  onConfigChanged?: ConfigChangedCallback;
+  reapplyStatusLine?: StatusLineReapplyCallback;
 };
 
 const defaultUsageClient: UsageClientPort = {
@@ -61,6 +70,9 @@ export function registerOpenAIUsageSettingsCommand(
   const usageRefreshCoordinator =
     dependencies.usageRefreshCoordinator ??
     createUsageRefreshCoordinator({ usageClient, usageState });
+  const patchConfig = dependencies.patchConfig ?? patchUsageConfig;
+  const onConfigChanged = dependencies.onConfigChanged ?? noopConfigChanged;
+  const reapplyStatusLine = dependencies.reapplyStatusLine ?? noopStatusLineReapply;
   const usageCommandFacade = createUsageCommandFacade({
     loadConfig,
     resolveCredentials: (ctx) => resolveCredentials(ctx as UsageSettingsCommandContext),
@@ -78,7 +90,13 @@ export function registerOpenAIUsageSettingsCommand(
 
       const lowered = trimmed.toLowerCase();
       if (trimmed.length === 0) {
-        await handleShowSettings({ commandContext, loadConfig });
+        await handleShowSettings({
+          commandContext,
+          loadConfig,
+          patchConfig,
+          onConfigChanged,
+          reapplyStatusLine,
+        });
         return;
       }
 
@@ -125,15 +143,85 @@ export function registerOpenAIUsageSettingsCommand(
 async function handleShowSettings(options: {
   commandContext: UsageSettingsCommandContext;
   loadConfig: () => LoadedUsageConfig;
+  patchConfig: ConfigPatchWriter;
+  onConfigChanged: ConfigChangedCallback;
+  reapplyStatusLine: StatusLineReapplyCallback;
 }): Promise<void> {
-  const { commandContext, loadConfig } = options;
+  const { commandContext, loadConfig, patchConfig, onConfigChanged, reapplyStatusLine } = options;
   if (!commandContext.hasUI || typeof commandContext.ui.custom !== "function") {
     notify(commandContext, usageSettingsNoUiFallbackText());
     return;
   }
 
   const loaded = loadConfig();
-  await openInteractiveSettingsMenu(commandContext, loaded.effective);
+  await openInteractiveSettingsMenu(commandContext, loaded.effective, {
+    onPatch: (patch) =>
+      handleInteractiveSettingsPatch({
+        commandContext,
+        configPath: loaded.configPath,
+        patch,
+        patchConfig,
+        onConfigChanged,
+        reapplyStatusLine,
+      }),
+  });
+}
+
+function handleInteractiveSettingsPatch(options: {
+  commandContext: UsageSettingsCommandContext;
+  configPath: string;
+  patch: UsageConfigPatch;
+  patchConfig: ConfigPatchWriter;
+  onConfigChanged: ConfigChangedCallback;
+  reapplyStatusLine: StatusLineReapplyCallback;
+}): void {
+  const { commandContext, configPath, patch, patchConfig, onConfigChanged, reapplyStatusLine } =
+    options;
+
+  try {
+    patchConfig(configPath, patch);
+  } catch {
+    return;
+  }
+
+  applySuccessfulMenuWriteSideEffects({
+    commandContext,
+    onConfigChanged,
+    reapplyStatusLine,
+  });
+}
+
+function applySuccessfulMenuWriteSideEffects(options: {
+  commandContext: UsageSettingsCommandContext;
+  onConfigChanged: ConfigChangedCallback;
+  reapplyStatusLine: StatusLineReapplyCallback;
+}): void {
+  const { commandContext, onConfigChanged, reapplyStatusLine } = options;
+
+  try {
+    const configChanged = onConfigChanged(commandContext);
+    if (isPromiseLike(configChanged)) {
+      void Promise.resolve(configChanged)
+        .then(() => reapplyStatusLine(commandContext))
+        .catch(() => undefined);
+      return;
+    }
+
+    const reapplied = reapplyStatusLine(commandContext);
+    if (isPromiseLike(reapplied)) {
+      void Promise.resolve(reapplied).catch(() => undefined);
+    }
+  } catch {
+    return;
+  }
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    (typeof value === "object" || typeof value === "function") &&
+    value !== null &&
+    typeof (value as { then?: unknown }).then === "function"
+  );
 }
 
 async function handleDiagnostics(options: {
@@ -234,6 +322,14 @@ function asUsageSettingsContext(ctx: ExtensionCommandContext): UsageSettingsComm
 
 function notify(ctx: UsageSettingsCommandContext, message: string): void {
   ctx.ui.notify(message, "info");
+}
+
+function noopConfigChanged(_ctx: UsageSettingsCommandContext): void {
+  return undefined;
+}
+
+function noopStatusLineReapply(_ctx: UsageSettingsCommandContext): void {
+  return undefined;
 }
 
 function defaultResolveCredentials(

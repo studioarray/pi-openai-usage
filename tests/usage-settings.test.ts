@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
@@ -9,7 +9,9 @@ import {
   DEFAULT_USAGE_CONFIG,
   type LoadedUsageConfig,
   type UsageConfig,
+  type UsageConfigPatch,
   loadUsageConfig,
+  patchUsageConfig,
 } from "../src/config";
 import {
   registerOpenAIUsageSettingsCommand,
@@ -171,6 +173,9 @@ function createSettingsHarness(options: {
   now?: () => Date;
   hasUI?: boolean;
   custom?: ExtensionCommandContext["ui"]["custom"];
+  onConfigChanged?: UsageSettingsCommandDependencies["onConfigChanged"];
+  reapplyStatusLine?: UsageSettingsCommandDependencies["reapplyStatusLine"];
+  patchConfig?: UsageSettingsCommandDependencies["patchConfig"];
 } = {}): SettingsHarness {
   let command: RegisteredCommand | undefined;
   let getArgumentCompletions: ArgumentCompletionProvider | undefined;
@@ -203,6 +208,9 @@ function createSettingsHarness(options: {
     usageClient,
     usageState,
     usageRefreshCoordinator,
+    onConfigChanged: options.onConfigChanged,
+    reapplyStatusLine: options.reapplyStatusLine,
+    patchConfig: options.patchConfig,
   };
 
   registerOpenAIUsageSettingsCommand(pi, dep);
@@ -252,6 +260,37 @@ function createTempProject() {
 function writeJson(path: string, value: unknown): void {
   mkdirSync(join(path, ".."), { recursive: true });
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function readJson(path: string): Record<string, unknown> {
+  return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+}
+
+function mergeExpectedPatch(
+  current: Record<string, unknown>,
+  patch: UsageConfigPatch,
+): Record<string, unknown> {
+  const next = { ...current };
+  for (const [key, value] of Object.entries(patch) as Array<[
+    keyof UsageConfigPatch,
+    UsageConfigPatch[keyof UsageConfigPatch],
+  ]>) {
+    if (value === undefined) continue;
+    if (isRecord(value)) {
+      next[key] = mergeExpectedPatch(isRecord(next[key]) ? next[key] : {}, value as UsageConfigPatch);
+      continue;
+    }
+    next[key] = value;
+  }
+  return next;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function flushMicrotasks(): Promise<void> {
+  return Promise.resolve().then(() => undefined);
 }
 
 describe("usage settings command", () => {
@@ -641,18 +680,298 @@ describe("usage settings command", () => {
       component.handleInput?.("\x1b");
       return undefined;
     });
+    const onConfigChanged = vi.fn();
+    const reapplyStatusLine = vi.fn();
     const { command, ctx } = createSettingsHarness({
       hasUI: true,
       loadConfig: () => loadUsageConfig({ cwd, home }),
       custom: custom as ExtensionCommandContext["ui"]["custom"],
+      onConfigChanged,
+      reapplyStatusLine,
     });
 
     await command("", ctx);
+    await flushMicrotasks();
 
     expect(cancelDoneCalled).toBe(true);
     expect(JSON.parse(readFileSync(projectConfigPath, "utf8")) as unknown).toEqual(initialConfig);
+    expect(onConfigChanged).not.toHaveBeenCalled();
+    expect(reapplyStatusLine).not.toHaveBeenCalled();
 
     rmSync(root, { recursive: true, force: true });
+  });
+
+  it("patch-writes every menu row to the selected target and reapplies after config changes", async () => {
+    const rowWrites: Array<{
+      rowIndex: number;
+      expectedPatch: UsageConfigPatch;
+      expectedPersistedFields: Record<string, unknown>;
+    }> = [
+      {
+        rowIndex: 0,
+        expectedPatch: { enabled: false, display: { showAlways: false } },
+        expectedPersistedFields: { enabled: false, display: { showAlways: false } },
+      },
+      {
+        rowIndex: 1,
+        expectedPatch: { colors: { scheme: "cyan" } },
+        expectedPersistedFields: { colors: { scheme: "cyan" } },
+      },
+      {
+        rowIndex: 2,
+        expectedPatch: { bar: { style: "thin" } },
+        expectedPersistedFields: { bar: { style: "thin" } },
+      },
+      {
+        rowIndex: 3,
+        expectedPatch: { bar: { width: 12 } },
+        expectedPersistedFields: { bar: { width: 12 } },
+      },
+      {
+        rowIndex: 4,
+        expectedPatch: { widgets: { fiveHour: { enabled: false, mode: "hidden" } } },
+        expectedPersistedFields: { widgets: { fiveHour: { enabled: false, mode: "hidden" } } },
+      },
+      {
+        rowIndex: 5,
+        expectedPatch: { widgets: { sevenDay: { enabled: false, mode: "hidden" } } },
+        expectedPersistedFields: { widgets: { sevenDay: { enabled: false, mode: "hidden" } } },
+      },
+      {
+        rowIndex: 6,
+        expectedPatch: { widgets: { fiveHourReset: { enabled: true, mode: "clock" } } },
+        expectedPersistedFields: { widgets: { fiveHourReset: { enabled: true, mode: "clock" } } },
+      },
+      {
+        rowIndex: 7,
+        expectedPatch: { widgets: { sevenDayReset: { enabled: true, mode: "clock" } } },
+        expectedPersistedFields: { widgets: { sevenDayReset: { enabled: true, mode: "clock" } } },
+      },
+      {
+        rowIndex: 8,
+        expectedPatch: { refreshIntervalMs: 120_000 },
+        expectedPersistedFields: { refreshIntervalMs: 120_000 },
+      },
+      {
+        rowIndex: 9,
+        expectedPatch: { display: { showLabel: false } },
+        expectedPersistedFields: { display: { showLabel: false } },
+      },
+    ];
+
+    for (const [writeIndex, rowWrite] of rowWrites.entries()) {
+      const { cwd, home, root } = createTempProject();
+      try {
+        const projectConfigPath = join(cwd, ".pi", "extensions", CONFIG_BASENAME);
+        const globalConfigPath = join(home, ".pi", "agent", "extensions", CONFIG_BASENAME);
+        const initialProjectConfig = {
+          enabled: true,
+          refreshIntervalMs: 60_000,
+          display: {
+            showAlways: false,
+            showLabel: true,
+            label: "Project Usage",
+            separator: " · ",
+            futureDisplay: { keep: true },
+          },
+          widgets: {
+            fiveHour: { enabled: true, label: "short", mode: "bar-percent", future: "keep" },
+            sevenDay: { enabled: true, label: "week", mode: "bar-percent", future: "keep" },
+            fiveHourReset: {
+              enabled: true,
+              label: "short reset",
+              mode: "countdown",
+              future: "keep",
+            },
+            sevenDayReset: {
+              enabled: true,
+              label: "week reset",
+              mode: "countdown",
+              future: "keep",
+            },
+            futureWidgets: { keep: true },
+          },
+          bar: {
+            style: "blocks",
+            width: 10,
+            custom: { filled: "X", empty: "_", partials: ["a", "b"] },
+            futureBar: { keep: true },
+          },
+          colors: {
+            scheme: "traffic",
+            target: "bar",
+            custom: {
+              mode: "step",
+              stops: [{ percent: 100, color: "success" }],
+            },
+            futureColors: { keep: true },
+          },
+          futureTopLevel: { keep: true },
+        };
+        const initialGlobalConfig = {
+          enabled: false,
+          globalOnly: { keep: true },
+        };
+        writeJson(projectConfigPath, initialProjectConfig);
+        writeJson(globalConfigPath, initialGlobalConfig);
+
+        let capturedPatch: UsageConfigPatch | undefined;
+        const patchConfig = vi.fn((configPath: string, patch: UsageConfigPatch) => {
+          capturedPatch = patch;
+          patchUsageConfig(configPath, patch);
+        });
+        const sideEffects: string[] = [];
+        const onConfigChanged = vi.fn(() => {
+          sideEffects.push("configChanged");
+        });
+        const reapplyStatusLine = vi.fn(() => {
+          sideEffects.push("reapply");
+        });
+        const custom = vi.fn(async (factory: Parameters<ExtensionCommandContext["ui"]["custom"]>[0]) => {
+          const component = await factory({} as never, {} as never, {} as never, () => undefined);
+          for (let count = 0; count < rowWrite.rowIndex; count += 1) {
+            component.handleInput?.("\x1b[B");
+          }
+          component.handleInput?.("\r");
+          return undefined;
+        });
+        const { command, ctx } = createSettingsHarness({
+          hasUI: true,
+          loadConfig: () => loadUsageConfig({ cwd, home }),
+          custom: custom as ExtensionCommandContext["ui"]["custom"],
+          patchConfig,
+          onConfigChanged,
+          reapplyStatusLine,
+        });
+
+        await command("", ctx);
+        await flushMicrotasks();
+
+        expect(capturedPatch, `row ${writeIndex}`).toEqual(rowWrite.expectedPatch);
+        expect(patchConfig, `row ${writeIndex}`).toHaveBeenCalledWith(
+          projectConfigPath,
+          rowWrite.expectedPatch,
+        );
+        expect(onConfigChanged, `row ${writeIndex}`).toHaveBeenCalledTimes(1);
+        expect(onConfigChanged, `row ${writeIndex}`).toHaveBeenCalledWith(ctx);
+        expect(reapplyStatusLine, `row ${writeIndex}`).toHaveBeenCalledTimes(1);
+        expect(reapplyStatusLine, `row ${writeIndex}`).toHaveBeenCalledWith(ctx);
+        expect(sideEffects, `row ${writeIndex}`).toEqual(["configChanged", "reapply"]);
+        expect(readJson(projectConfigPath), `row ${writeIndex}`).toEqual(
+          mergeExpectedPatch(initialProjectConfig, rowWrite.expectedPersistedFields),
+        );
+        expect(readJson(globalConfigPath), `row ${writeIndex}`).toEqual(initialGlobalConfig);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("writes to the selected global target and creates parent directories when no project config exists", async () => {
+    const { cwd, home, root } = createTempProject();
+    try {
+      const projectConfigPath = join(cwd, ".pi", "extensions", CONFIG_BASENAME);
+      const globalConfigPath = join(home, ".pi", "agent", "extensions", CONFIG_BASENAME);
+      const custom = vi.fn(async (factory: Parameters<ExtensionCommandContext["ui"]["custom"]>[0]) => {
+        const component = await factory({} as never, {} as never, {} as never, () => undefined);
+        component.handleInput?.("\r");
+        return undefined;
+      });
+      const onConfigChanged = vi.fn();
+      const reapplyStatusLine = vi.fn();
+      const { command, ctx } = createSettingsHarness({
+        hasUI: true,
+        loadConfig: () => loadUsageConfig({ cwd, home }),
+        custom: custom as ExtensionCommandContext["ui"]["custom"],
+        onConfigChanged,
+        reapplyStatusLine,
+      });
+
+      await command("", ctx);
+      await flushMicrotasks();
+
+      expect(existsSync(projectConfigPath)).toBe(false);
+      expect(readJson(globalConfigPath)).toEqual({
+        enabled: false,
+        display: { showAlways: false },
+      });
+      expect(onConfigChanged).toHaveBeenCalledTimes(1);
+      expect(reapplyStatusLine).toHaveBeenCalledTimes(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not run config-change side effects when a menu write fails", async () => {
+    const { cwd, home, root } = createTempProject();
+    try {
+      const projectConfigPath = join(cwd, ".pi", "extensions", CONFIG_BASENAME);
+      const initialConfig = { enabled: true, display: { showAlways: false } };
+      writeJson(projectConfigPath, initialConfig);
+      const custom = vi.fn(async (factory: Parameters<ExtensionCommandContext["ui"]["custom"]>[0]) => {
+        const component = await factory({} as never, {} as never, {} as never, () => undefined);
+        component.handleInput?.("\r");
+        return undefined;
+      });
+      const onConfigChanged = vi.fn();
+      const reapplyStatusLine = vi.fn();
+      const { command, ctx } = createSettingsHarness({
+        hasUI: true,
+        loadConfig: () => loadUsageConfig({ cwd, home }),
+        custom: custom as ExtensionCommandContext["ui"]["custom"],
+        patchConfig: vi.fn(() => {
+          throw new Error("disk full");
+        }),
+        onConfigChanged,
+        reapplyStatusLine,
+      });
+
+      await expect(command("", ctx)).resolves.toBeUndefined();
+      await flushMicrotasks();
+
+      expect(readJson(projectConfigPath)).toEqual(initialConfig);
+      expect(onConfigChanged).not.toHaveBeenCalled();
+      expect(reapplyStatusLine).not.toHaveBeenCalled();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not run config-change side effects for invalid menu selections", async () => {
+    const { cwd, home, root } = createTempProject();
+    try {
+      const projectConfigPath = join(cwd, ".pi", "extensions", CONFIG_BASENAME);
+      const initialConfig = { enabled: true, display: { showAlways: false } };
+      writeJson(projectConfigPath, initialConfig);
+      const custom = vi.fn(async (factory: Parameters<ExtensionCommandContext["ui"]["custom"]>[0]) => {
+        const component = await factory({} as never, {} as never, {} as never, () => undefined);
+        const onChange = (component as unknown as { onChange: (id: string, value: string) => void }).onChange;
+        onChange("display", "invalid");
+        onChange("unknown-row", "On");
+        return undefined;
+      });
+      const patchConfig = vi.fn();
+      const onConfigChanged = vi.fn();
+      const reapplyStatusLine = vi.fn();
+      const { command, ctx } = createSettingsHarness({
+        hasUI: true,
+        loadConfig: () => loadUsageConfig({ cwd, home }),
+        custom: custom as ExtensionCommandContext["ui"]["custom"],
+        patchConfig,
+        onConfigChanged,
+        reapplyStatusLine,
+      });
+
+      await command("", ctx);
+      await flushMicrotasks();
+
+      expect(patchConfig).not.toHaveBeenCalled();
+      expect(readJson(projectConfigPath)).toEqual(initialConfig);
+      expect(onConfigChanged).not.toHaveBeenCalled();
+      expect(reapplyStatusLine).not.toHaveBeenCalled();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("help describes the one-command surface", async () => {

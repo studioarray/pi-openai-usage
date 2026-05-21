@@ -26,7 +26,7 @@ type PiTheme = {
   fg?: (color: string, text: string) => string;
 };
 
-type InteractiveSettingsMenuCallbacks = {
+export type InteractiveSettingsMenuCallbacks = {
   onCancel?: () => void;
   onChange?: (id: string, newValue: string) => void;
   onPatch?: (patch: UsageConfigPatch) => void;
@@ -83,10 +83,15 @@ const SETTING_PATCH_BUILDERS: Record<string, SettingPatchBuilder> = {
 export async function openInteractiveSettingsMenu(
   ctx: InteractiveSettingsMenuContext,
   config: UsageConfig,
+  callbacks: InteractiveSettingsMenuCallbacks = {},
 ): Promise<void> {
   await ctx.ui.custom<void>((_tui, theme, _keybindings, done) =>
     createInteractiveSettingsMenu(config, {
-      onCancel: () => done(undefined),
+      ...callbacks,
+      onCancel: () => {
+        callbacks.onCancel?.();
+        done(undefined);
+      },
       theme: createSettingsListTheme(theme as PiTheme),
     }),
   );

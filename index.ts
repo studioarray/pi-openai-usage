@@ -17,7 +17,7 @@ export default function piOpenAIUsage(pi: ExtensionAPI): void {
     usageState,
   });
 
-  registerUsageStatusController(pi, {
+  const statusController = registerUsageStatusController(pi, {
     usageClient,
     usageState,
     usageRefreshCoordinator,
@@ -26,6 +26,7 @@ export default function piOpenAIUsage(pi: ExtensionAPI): void {
     registerOpenAIUsageSettingsCommand(pi, {
       usageState,
       usageRefreshCoordinator,
+      reapplyStatusLine: (ctx) => statusController.reapply(ctx),
     });
   }
 }

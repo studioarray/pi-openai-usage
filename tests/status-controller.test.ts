@@ -279,7 +279,7 @@ describe("usage status controller", () => {
     await startSession;
   });
 
-  it("does not reapply status or mutate config from the removed settings set path", async () => {
+  it("reapplies the status line after a successful interactive menu write", async () => {
     const root = mkdtempSync(join(tmpdir(), "pi-openai-usage-settings-reapply-"));
     const project = join(root, "project");
     const previousCwd = process.cwd();
@@ -310,7 +310,13 @@ describe("usage status controller", () => {
         },
       } as unknown as ExtensionAPI;
 
+      const custom = vi.fn(async (factory: Parameters<ExtensionCommandContext["ui"]["custom"]>[0]) => {
+        const component = await factory({} as never, {} as never, {} as never, () => undefined);
+        component.handleInput?.("\r");
+        return undefined;
+      });
       const ctx = {
+        hasUI: true,
         model: { provider: "openai", id: "any-openai-model" },
         modelRegistry: {
           isUsingOAuth: vi.fn(() => true),
@@ -321,6 +327,7 @@ describe("usage status controller", () => {
           notify: vi.fn(),
           setStatus: vi.fn(),
           setFooter: vi.fn(),
+          custom,
         },
       } as unknown as FakeExtensionContext & ExtensionCommandContext;
 
@@ -330,14 +337,16 @@ describe("usage status controller", () => {
       }
       expect(ctx.ui.setStatus).toHaveBeenLastCalledWith("openai-usage", "Usage login required");
 
-      await settingsCommand?.("set enabled false", ctx);
+      await settingsCommand?.("", ctx);
+      await Promise.resolve();
+      await Promise.resolve();
 
-      expect(ctx.ui.notify).toHaveBeenLastCalledWith(
-        expect.stringContaining("Slash-command setting writes were removed"),
-        "info",
-      );
-      expect(JSON.parse(readFileSync(configPath, "utf8")) as unknown).toEqual(initialConfig);
-      expect(ctx.ui.setStatus).toHaveBeenLastCalledWith("openai-usage", "Usage login required");
+      expect(JSON.parse(readFileSync(configPath, "utf8")) as unknown).toEqual({
+        ...initialConfig,
+        enabled: false,
+        display: { ...initialConfig.display, showAlways: false },
+      });
+      expect(ctx.ui.setStatus).toHaveBeenLastCalledWith("openai-usage", undefined);
     } finally {
       process.chdir(previousCwd);
       if (previousAgentDir === undefined) {
