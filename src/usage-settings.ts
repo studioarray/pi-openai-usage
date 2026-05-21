@@ -112,6 +112,11 @@ export function registerOpenAIUsageSettingsCommand(
         return;
       }
 
+      if (lowered === "refresh") {
+        await usageCommandFacade.showUsage(commandContext, { forceRefresh: true });
+        return;
+      }
+
       if (lowered === "help") {
         notify(ctx, usageSettingsHelpText());
         return;

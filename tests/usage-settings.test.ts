@@ -15,12 +15,13 @@ import {
   registerOpenAIUsageSettingsCommand,
   type UsageSettingsCommandDependencies,
 } from "../src/usage-settings";
+import { registerUsageStatusController } from "../src/status-controller";
 import { formatUsageStatusLine } from "../src/format";
 import { createUsageRefreshCoordinator, type UsageRefreshCoordinator } from "../src/usage-refresh-coordinator";
 import { parseUsageSnapshot } from "../src/usage-snapshot";
 import { createUsageStateStore, type UsageStateStore } from "../src/usage-state";
 import type { CodexCredentialResolution } from "../src/auth";
-import type { UsageClientPort, UsageFetchResult } from "../src/usage-client";
+import type { UsageClientPort, UsageFetchError, UsageFetchResult } from "../src/usage-client";
 
 type RegisteredCommand = (args: string, ctx: ExtensionCommandContext) => Promise<void>;
 
@@ -135,6 +136,20 @@ function rawUsageResponseWithSparkBucket(): unknown {
 
 function successfulUsageFetchResult(raw: unknown = rawUsageResponse()): UsageFetchResult {
   return { ok: true, raw, status: 200 };
+}
+
+function failedUsageFetchResult(error: UsageFetchError): UsageFetchResult {
+  return { ok: false, error };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
 }
 
 function statusLineFromRaw(raw: unknown, config: UsageConfig = DEFAULT_USAGE_CONFIG): string {
@@ -261,6 +276,169 @@ describe("usage settings command", () => {
 
     expect(usageClient.fetchUsage).not.toHaveBeenCalled();
     expect(lastNotifyText(ctx)).toBe(formatUsageStatusLine({ snapshot, config: DEFAULT_USAGE_CONFIG }));
+  });
+
+  it("forces refresh from the refresh utility even when cached usage is fresh", async () => {
+    const cachedSnapshot = parseUsageSnapshot(rawUsageResponse(), {
+      modelId: "any-openai-model",
+      nowMs: Date.UTC(2026, 0, 1),
+    });
+    const usageState = createUsageStateStore();
+    usageState.storeSnapshot(cachedSnapshot, new Date("2026-01-01T00:00:00.000Z"));
+
+    const refreshedRaw = rawUsageResponse({
+      fiveHourUsedPercent: 9,
+      sevenDayUsedPercent: 11,
+      fiveHourResetAfterSeconds: 120,
+      sevenDayResetAfterSeconds: 420,
+    });
+    const usageClient = {
+      fetchUsage: vi.fn(async () => successfulUsageFetchResult(refreshedRaw)),
+    } satisfies UsageClientPort;
+    const { command, ctx } = createSettingsHarness({
+      usageClient,
+      usageState,
+      now: () => new Date("2026-01-01T00:00:30.000Z"),
+    });
+
+    await command("refresh", ctx);
+
+    expect(usageClient.fetchUsage).toHaveBeenCalledTimes(1);
+    expect(lastNotifyText(ctx)).toBe(statusLineFromRaw(refreshedRaw));
+  });
+
+  it("joins a status-controller refresh through the shared coordinator", async () => {
+    type RegisteredHandler = (event: { type: string }, ctx: ExtensionCommandContext) => unknown;
+
+    const inFlightFetch = deferred<UsageFetchResult>();
+    const refreshedRaw = rawUsageResponse({ fiveHourUsedPercent: 18, sevenDayUsedPercent: 24 });
+    const usageClient = {
+      fetchUsage: vi.fn(async () => inFlightFetch.promise),
+    } satisfies UsageClientPort;
+    const usageState = createUsageStateStore();
+    const usageRefreshCoordinator = createUsageRefreshCoordinator({ usageClient, usageState });
+    const handlers = new Map<string, RegisteredHandler[]>();
+    let settingsCommand: RegisteredCommand | undefined;
+    const loadConfig = () => buildLoadedConfig(DEFAULT_USAGE_CONFIG);
+    const resolveCredentials = async () => successfulCredentialResolution();
+
+    const pi = {
+      on(eventName: string, handler: RegisteredHandler) {
+        const eventHandlers = handlers.get(eventName) ?? [];
+        eventHandlers.push(handler);
+        handlers.set(eventName, eventHandlers);
+      },
+      registerCommand(name: string, definition: { handler: RegisteredCommand }) {
+        if (name === "openai-usage-settings") {
+          settingsCommand = definition.handler;
+        }
+      },
+    } as unknown as ExtensionAPI;
+
+    registerUsageStatusController(pi, {
+      loadConfig,
+      resolveCredentials,
+      usageClient,
+      usageState,
+      usageRefreshCoordinator,
+      timerApi: {
+        setInterval: vi.fn(() => ({ id: "unused" })),
+        clearInterval: vi.fn(),
+      },
+    });
+    registerOpenAIUsageSettingsCommand(pi, {
+      loadConfig,
+      resolveCredentials,
+      usageClient,
+      usageState,
+      usageRefreshCoordinator,
+    });
+
+    const ctx = {
+      hasUI: false,
+      ui: {
+        notify: vi.fn(),
+        setStatus: vi.fn(),
+      },
+      model: { provider: "openai", id: "any-openai-model" },
+      signal: undefined,
+      modelRegistry: {
+        isUsingOAuth: vi.fn(() => true),
+        getApiKeyForProvider: vi.fn(async () => "access-token"),
+      },
+    } as unknown as ExtensionCommandContext;
+
+    const statusRefresh = Promise.all(
+      (handlers.get("session_start") ?? []).map((handler) =>
+        handler({ type: "session_start" }, ctx),
+      ),
+    );
+    await Promise.resolve();
+
+    const commandRefresh = settingsCommand!("refresh", ctx);
+    await Promise.resolve();
+
+    expect(usageClient.fetchUsage).toHaveBeenCalledTimes(1);
+
+    inFlightFetch.resolve(successfulUsageFetchResult(refreshedRaw));
+    await Promise.all([statusRefresh, commandRefresh]);
+
+    expect(usageClient.fetchUsage).toHaveBeenCalledTimes(1);
+    expect(lastNotifyText(ctx)).toBe(statusLineFromRaw(refreshedRaw));
+    expect(ctx.ui.setStatus).toHaveBeenLastCalledWith("openai-usage", statusLineFromRaw(refreshedRaw));
+  });
+
+  it("renders auth-failed status when the refresh utility receives an auth failure", async () => {
+    const usageClient = {
+      fetchUsage: vi.fn(async () =>
+        failedUsageFetchResult({
+          kind: "auth",
+          status: 401,
+          message: "Codex usage authentication failed for token: secret-token",
+        }),
+      ),
+    } satisfies UsageClientPort;
+    const { command, ctx } = createSettingsHarness({ usageClient });
+
+    await command("refresh", ctx);
+
+    expect(usageClient.fetchUsage).toHaveBeenCalledTimes(1);
+    expect(lastNotifyText(ctx)).toBe("Usage auth failed");
+    expect(lastNotifyText(ctx)).not.toContain("secret-token");
+  });
+
+  it("renders refresh-failed status when the refresh utility fails without cached usage", async () => {
+    const usageClient = {
+      fetchUsage: vi.fn(async () =>
+        failedUsageFetchResult({ kind: "network", status: 503, message: "temporary outage" }),
+      ),
+    } satisfies UsageClientPort;
+    const { command, ctx } = createSettingsHarness({ usageClient });
+
+    await command("refresh", ctx);
+
+    expect(usageClient.fetchUsage).toHaveBeenCalledTimes(1);
+    expect(lastNotifyText(ctx)).toBe("Usage refresh failed");
+  });
+
+  it("renders cached usage with the refresh-failed marker when the refresh utility fails with cache", async () => {
+    const cachedRaw = rawUsageResponse({ fiveHourUsedPercent: 15, sevenDayUsedPercent: 25 });
+    const usageState = createUsageStateStore();
+    usageState.storeSnapshot(
+      parseUsageSnapshot(cachedRaw, { modelId: "any-openai-model", nowMs: Date.UTC(2026, 0, 1) }),
+      new Date("2026-01-01T00:00:00.000Z"),
+    );
+    const usageClient = {
+      fetchUsage: vi.fn(async () =>
+        failedUsageFetchResult({ kind: "network", status: 503, message: "temporary outage" }),
+      ),
+    } satisfies UsageClientPort;
+    const { command, ctx } = createSettingsHarness({ usageClient, usageState });
+
+    await command("refresh", ctx);
+
+    expect(usageClient.fetchUsage).toHaveBeenCalledTimes(1);
+    expect(lastNotifyText(ctx)).toBe(`${statusLineFromRaw(cachedRaw)} (refresh failed)`);
   });
 
   it("uses the effective refresh interval to decide when cached usage is stale", async () => {
