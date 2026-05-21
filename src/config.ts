@@ -12,10 +12,24 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 export const CONFIG_BASENAME = "pi-openai-usage.json";
-export const MIN_REFRESH_INTERVAL_MS = 15_000;
-export const MAX_REFRESH_INTERVAL_MS = 10 * 60_000;
 export const MIN_BAR_WIDTH = 1;
 export const MAX_BAR_WIDTH = 40;
+export const APPROVED_BAR_WIDTHS = [4, 6, 8, 10, 12, 16, 20] as const;
+export const APPROVED_REFRESH_INTERVALS_MS = [
+  15_000,
+  30_000,
+  60_000,
+  120_000,
+  300_000,
+  600_000,
+] as const;
+export const MIN_REFRESH_INTERVAL_MS = APPROVED_REFRESH_INTERVALS_MS[0];
+export const MAX_REFRESH_INTERVAL_MS = APPROVED_REFRESH_INTERVALS_MS[
+  APPROVED_REFRESH_INTERVALS_MS.length - 1
+];
+
+export type ApprovedBarWidth = (typeof APPROVED_BAR_WIDTHS)[number];
+export type ApprovedRefreshIntervalMs = (typeof APPROVED_REFRESH_INTERVALS_MS)[number];
 
 const WINDOW_WIDGET_MODES = ["percent", "bar", "bar-percent", "hidden"] as const;
 const RESET_WIDGET_MODES = ["countdown", "clock", "both", "hidden"] as const;
@@ -143,7 +157,7 @@ export type ResetWidgetConfigPatch = Partial<ResetWidgetConfig>;
 
 export type UsageConfigPatch = {
   enabled?: boolean;
-  refreshIntervalMs?: number;
+  refreshIntervalMs?: ApprovedRefreshIntervalMs;
   display?: Partial<DisplayConfig>;
   widgets?: Partial<{
     fiveHour: WindowWidgetConfigPatch;
@@ -153,7 +167,7 @@ export type UsageConfigPatch = {
   }>;
   bar?: Partial<{
     style: BarStyleName;
-    width: number;
+    width: ApprovedBarWidth;
     partials: boolean;
     custom: Partial<CustomBarStyleConfig>;
   }>;
@@ -266,16 +280,12 @@ function normalizeUsageConfig(
 ): UsageConfig {
   return {
     enabled: configValue(projectRaw, globalRaw, ["enabled"], isBoolean, DEFAULT_USAGE_CONFIG.enabled),
-    refreshIntervalMs: clampInteger(
-      configValue(
-        projectRaw,
-        globalRaw,
-        ["refreshIntervalMs"],
-        isFiniteNumber,
-        DEFAULT_USAGE_CONFIG.refreshIntervalMs,
-      ),
-      MIN_REFRESH_INTERVAL_MS,
-      MAX_REFRESH_INTERVAL_MS,
+    refreshIntervalMs: configValue(
+      projectRaw,
+      globalRaw,
+      ["refreshIntervalMs"],
+      isApprovedRefreshIntervalMs,
+      DEFAULT_USAGE_CONFIG.refreshIntervalMs,
     ),
     display: normalizeDisplayConfig(projectRaw, globalRaw),
     widgets: normalizeWidgetConfig(projectRaw, globalRaw),
@@ -408,16 +418,12 @@ function normalizeBarConfig(
       isBarStyleName,
       DEFAULT_USAGE_CONFIG.bar.style,
     ),
-    width: clampInteger(
-      configValue(
-        projectRaw,
-        globalRaw,
-        ["bar", "width"],
-        isFiniteNumber,
-        DEFAULT_USAGE_CONFIG.bar.width,
-      ),
-      MIN_BAR_WIDTH,
-      MAX_BAR_WIDTH,
+    width: configValue(
+      projectRaw,
+      globalRaw,
+      ["bar", "width"],
+      isApprovedBarWidth,
+      DEFAULT_USAGE_CONFIG.bar.width,
     ),
     partials: configValue(
       projectRaw,
@@ -679,6 +685,14 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
+function isApprovedBarWidth(value: unknown): value is ApprovedBarWidth {
+  return includesNumber(APPROVED_BAR_WIDTHS, value);
+}
+
+function isApprovedRefreshIntervalMs(value: unknown): value is ApprovedRefreshIntervalMs {
+  return includesNumber(APPROVED_REFRESH_INTERVALS_MS, value);
+}
+
 function isWindowWidgetMode(value: unknown): value is WindowWidgetMode {
   return includesString(WINDOW_WIDGET_MODES, value);
 }
@@ -713,6 +727,13 @@ function isPiThemeColorToken(value: unknown): value is PiThemeColorToken {
 
 function includesString<const T extends readonly string[]>(values: T, value: unknown): value is T[number] {
   return typeof value === "string" && values.includes(value);
+}
+
+function includesNumber<const T extends readonly number[]>(
+  values: T,
+  value: unknown,
+): value is T[number] {
+  return typeof value === "number" && values.some((candidate) => candidate === value);
 }
 
 function isHexColor(value: unknown): value is `#${string}` {

@@ -4,11 +4,10 @@ import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  APPROVED_BAR_WIDTHS,
+  APPROVED_REFRESH_INTERVALS_MS,
   CONFIG_BASENAME,
   DEFAULT_USAGE_CONFIG,
-  MAX_BAR_WIDTH,
-  MIN_BAR_WIDTH,
-  MIN_REFRESH_INTERVAL_MS,
   loadUsageConfig,
   patchUsageConfig,
 } from "../src/config";
@@ -46,7 +45,7 @@ describe("configuration store", () => {
       writeJson(projectPath, {
         enabled: false,
         display: { showAlways: true },
-        bar: { width: 5 },
+        bar: { width: 16 },
       });
 
       const loaded = loadUsageConfig({ cwd, home });
@@ -61,14 +60,14 @@ describe("configuration store", () => {
       expect(loaded.effective.widgets.fiveHour.mode).toBe(
         DEFAULT_USAGE_CONFIG.widgets.fiveHour.mode,
       );
-      expect(loaded.effective.bar.width).toBe(5);
+      expect(loaded.effective.bar.width).toBe(16);
       expect(loaded.effective.colors.target).toBe("bar");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it("falls back safely for invalid values and clamps configured ranges", () => {
+  it("falls back safely for invalid values and invalid presets", () => {
     const { root, cwd, home } = createTempProject();
     try {
       const projectPath = join(cwd, ".pi", "extensions", CONFIG_BASENAME);
@@ -97,7 +96,7 @@ describe("configuration store", () => {
       const { effective } = loadUsageConfig({ cwd, home });
 
       expect(effective.enabled).toBe(DEFAULT_USAGE_CONFIG.enabled);
-      expect(effective.refreshIntervalMs).toBe(MIN_REFRESH_INTERVAL_MS);
+      expect(effective.refreshIntervalMs).toBe(DEFAULT_USAGE_CONFIG.refreshIntervalMs);
       expect(effective.display).toEqual(DEFAULT_USAGE_CONFIG.display);
       expect(effective.widgets.fiveHour).toEqual(DEFAULT_USAGE_CONFIG.widgets.fiveHour);
       expect(effective.widgets.sevenDayReset).toEqual(DEFAULT_USAGE_CONFIG.widgets.sevenDayReset);
@@ -195,6 +194,142 @@ describe("configuration store", () => {
     }
   });
 
+  it("keeps JSON-only advanced display, widget, bar, and color states", () => {
+    const { root, cwd, home } = createTempProject();
+    try {
+      const projectPath = join(cwd, ".pi", "extensions", CONFIG_BASENAME);
+      writeJson(projectPath, {
+        display: { label: "Tokens", separator: " · " },
+        widgets: {
+          fiveHour: { label: "short", mode: "percent" },
+          sevenDayReset: { label: "weekly reset", mode: "both" },
+        },
+        bar: {
+          style: "custom",
+          width: 20,
+          partials: false,
+          custom: { filled: "X", empty: "_", partials: ["a", "b"] },
+        },
+        colors: {
+          scheme: "custom",
+          target: "bar",
+          barGradient: { enabled: true, direction: "high-to-low" },
+          custom: {
+            mode: "step",
+            stops: [
+              { percent: 100, color: "success" },
+              { percent: 0, color: "error" },
+            ],
+          },
+        },
+      });
+
+      const { effective } = loadUsageConfig({ cwd, home });
+
+      expect(effective.display.label).toBe("Tokens");
+      expect(effective.display.separator).toBe(" · ");
+      expect(effective.widgets.fiveHour.label).toBe("short");
+      expect(effective.widgets.fiveHour.mode).toBe("percent");
+      expect(effective.widgets.sevenDayReset.label).toBe("weekly reset");
+      expect(effective.widgets.sevenDayReset.mode).toBe("both");
+      expect(effective.bar).toEqual({
+        style: "custom",
+        width: 20,
+        partials: false,
+        custom: { filled: "X", empty: "_", partials: ["a", "b"] },
+      });
+      expect(effective.colors).toEqual({
+        scheme: "custom",
+        target: "bar",
+        barGradient: { enabled: true, direction: "high-to-low" },
+        custom: {
+          mode: "step",
+          stops: [
+            { percent: 100, color: "success" },
+            { percent: 0, color: "error" },
+          ],
+        },
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts only approved JSON bar widths", () => {
+    expect(APPROVED_BAR_WIDTHS).toEqual([4, 6, 8, 10, 12, 16, 20]);
+
+    for (const width of APPROVED_BAR_WIDTHS) {
+      const { root, cwd, home } = createTempProject();
+      try {
+        const projectPath = join(cwd, ".pi", "extensions", CONFIG_BASENAME);
+        writeJson(projectPath, { bar: { width } });
+
+        const { effective } = loadUsageConfig({ cwd, home });
+
+        expect(effective.bar.width).toBe(width);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("defaults arbitrary JSON bar widths instead of clamping them", () => {
+    for (const width of [3, 5, 15, 999]) {
+      const { root, cwd, home } = createTempProject();
+      try {
+        const projectPath = join(cwd, ".pi", "extensions", CONFIG_BASENAME);
+        writeJson(projectPath, { bar: { width } });
+
+        const { effective } = loadUsageConfig({ cwd, home });
+
+        expect(effective.bar.width).toBe(DEFAULT_USAGE_CONFIG.bar.width);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("accepts only approved JSON refresh intervals", () => {
+    expect(APPROVED_REFRESH_INTERVALS_MS).toEqual([
+      15_000,
+      30_000,
+      60_000,
+      120_000,
+      300_000,
+      600_000,
+    ]);
+
+    for (const refreshIntervalMs of APPROVED_REFRESH_INTERVALS_MS) {
+      const { root, cwd, home } = createTempProject();
+      try {
+        const projectPath = join(cwd, ".pi", "extensions", CONFIG_BASENAME);
+        writeJson(projectPath, { refreshIntervalMs });
+
+        const { effective } = loadUsageConfig({ cwd, home });
+
+        expect(effective.refreshIntervalMs).toBe(refreshIntervalMs);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("defaults arbitrary JSON refresh intervals instead of clamping them", () => {
+    for (const refreshIntervalMs of [1, 45_000, 90_000, 900_000]) {
+      const { root, cwd, home } = createTempProject();
+      try {
+        const projectPath = join(cwd, ".pi", "extensions", CONFIG_BASENAME);
+        writeJson(projectPath, { refreshIntervalMs });
+
+        const { effective } = loadUsageConfig({ cwd, home });
+
+        expect(effective.refreshIntervalMs).toBe(DEFAULT_USAGE_CONFIG.refreshIntervalMs);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
   it("validates custom bar styles and bar-gradient settings safely", () => {
     const { root, cwd, home } = createTempProject();
     try {
@@ -213,7 +348,7 @@ describe("configuration store", () => {
       const { effective } = loadUsageConfig({ cwd, home });
 
       expect(effective.bar.style).toBe("custom");
-      expect(effective.bar.width).toBe(MAX_BAR_WIDTH);
+      expect(effective.bar.width).toBe(DEFAULT_USAGE_CONFIG.bar.width);
       expect(effective.bar.custom).toEqual({
         filled: DEFAULT_USAGE_CONFIG.bar.custom.filled,
         empty: "□",
@@ -223,20 +358,6 @@ describe("configuration store", () => {
         enabled: true,
         direction: DEFAULT_USAGE_CONFIG.colors.barGradient.direction,
       });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("clamps bar width to the safe lower bound", () => {
-    const { root, cwd, home } = createTempProject();
-    try {
-      const projectPath = join(cwd, ".pi", "extensions", CONFIG_BASENAME);
-      writeJson(projectPath, { bar: { width: -10 } });
-
-      const { effective } = loadUsageConfig({ cwd, home });
-
-      expect(effective.bar.width).toBe(MIN_BAR_WIDTH);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
