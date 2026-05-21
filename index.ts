@@ -31,6 +31,7 @@ export default function piOpenAIUsage(pi: ExtensionAPI): void {
     });
     registerOpenAIUsageSettingsCommand(pi, {
       usageState,
+      usageRefreshCoordinator,
       onConfigChanged: (ctx) => usageStatusController.reapply(ctx),
     });
   }

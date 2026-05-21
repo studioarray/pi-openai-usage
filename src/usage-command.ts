@@ -7,15 +7,8 @@ import {
   resolveCodexOAuthCredentials,
   type CodexCredentialResolution,
 } from "./auth";
-import { type UsageRefreshCoordinator, type UsageRefreshResult } from "./usage-refresh-coordinator";
-import type { UsageConfig } from "./config";
-import {
-  appendUsageRefreshFailureMarker,
-  formatUsageAuthFailedStatusLine,
-  formatUsageLoginRequiredStatusLine,
-  formatUsageRefreshFailedStatusLine,
-  formatUsageStatusLine,
-} from "./format";
+import { type UsageRefreshCoordinator } from "./usage-refresh-coordinator";
+import { createUsageCommandFacade } from "./usage-command-facade";
 import { type LoadedUsageConfig, loadUsageConfig } from "./config";
 import type { UsageClientPort, UsageFetchError } from "./usage-client";
 import { USAGE_ENDPOINT, fetchCodexUsage } from "./usage-client";
@@ -48,6 +41,11 @@ export function registerOpenAIUsageCommand(
   const usageClient = dependencies.usageClient ?? defaultUsageClient;
   const usageRefreshCoordinator =
     dependencies.usageRefreshCoordinator ?? createUsageRefreshCoordinator({ usageClient, usageState });
+  const usageCommandFacade = createUsageCommandFacade({
+    loadConfig,
+    resolveCredentials,
+    usageRefreshCoordinator,
+  });
 
   pi.registerCommand("openai-usage", {
     description: "Show usage status, force refresh, or show usage diagnostics",
@@ -57,25 +55,12 @@ export function registerOpenAIUsageCommand(
       const [subcommand] = trimmed.length === 0 ? [] : trimmed.split(/\s+/);
 
       if (subcommand === undefined) {
-        await handleUsageQuery({
-          ctx: asUsageCommandContext(ctx),
-          loadConfig,
-          resolveCredentials,
-          usageState,
-          usageRefreshCoordinator,
-        });
+        await usageCommandFacade.showUsage(asUsageCommandContext(ctx));
         return;
       }
 
       if (subcommand === "refresh") {
-        await handleUsageQuery({
-          ctx: asUsageCommandContext(ctx),
-          loadConfig,
-          resolveCredentials,
-          usageState,
-          usageRefreshCoordinator,
-          forceRefresh: true,
-        });
+        await usageCommandFacade.showUsage(asUsageCommandContext(ctx), { forceRefresh: true });
         return;
       }
 
@@ -96,65 +81,6 @@ export function registerOpenAIUsageCommand(
 
       notify(ctx, `Unknown /openai-usage subcommand \"${args.trim()}\". Use /openai-usage help`);
     },
-  });
-}
-
-async function handleUsageQuery(options: {
-  ctx: UsageCommandContext;
-  loadConfig: () => LoadedUsageConfig;
-  resolveCredentials: (ctx: UsageCommandContext) => Promise<CodexCredentialResolution>;
-  usageState: UsageStateStore;
-  usageRefreshCoordinator: UsageRefreshCoordinator;
-  forceRefresh?: boolean;
-}): Promise<void> {
-  const { ctx, loadConfig, resolveCredentials, usageState, usageRefreshCoordinator, forceRefresh } = options;
-
-  const initialConfig = loadConfig().effective;
-  const credentials = await resolveCredentials(ctx);
-  if (!credentials.ok) {
-    notify(ctx, formatUsageLoginRequiredStatusLine());
-    return;
-  }
-
-  const refreshResult = await usageRefreshCoordinator.refresh({
-    credentials: credentials.credentials,
-    signal: ctx.signal,
-    modelId: ctx.model?.id,
-    staleAfterMs: initialConfig.refreshIntervalMs,
-    force: forceRefresh,
-  });
-
-  const latestConfig = loadConfig().effective;
-  const statusText = resolveUsageStatusText(latestConfig, refreshResult, ctx.ui.theme);
-  notify(ctx, statusText ?? "Usage refresh failed");
-}
-
-function resolveUsageStatusText(
-  config: UsageConfig,
-  refreshResult: UsageRefreshResult,
-  theme?: UsageCommandContext["ui"]["theme"],
-): string | undefined {
-  if (refreshResult.status === "failed") {
-    if (refreshResult.error.kind === "auth") {
-      return formatUsageAuthFailedStatusLine();
-    }
-
-    const cachedText = formatUsageStatusLine({
-      snapshot: refreshResult.snapshot,
-      config,
-      theme,
-    });
-    if (cachedText !== undefined) {
-      return appendUsageRefreshFailureMarker(cachedText, theme);
-    }
-
-    return formatUsageRefreshFailedStatusLine();
-  }
-
-  return formatUsageStatusLine({
-    snapshot: refreshResult.snapshot,
-    config,
-    theme,
   });
 }
 

@@ -34,7 +34,17 @@ import {
   patchUsageConfig,
 } from "./config";
 import { resolveCodexOAuthCredentials, type CodexCredentialResolution } from "./auth";
-import { USAGE_ENDPOINT, type UsageFetchError } from "./usage-client";
+import { createUsageCommandFacade } from "./usage-command-facade";
+import {
+  createUsageRefreshCoordinator,
+  type UsageRefreshCoordinator,
+} from "./usage-refresh-coordinator";
+import {
+  fetchCodexUsage,
+  USAGE_ENDPOINT,
+  type UsageClientPort,
+  type UsageFetchError,
+} from "./usage-client";
 import { type UsageStateStore, createUsageStateStore } from "./usage-state";
 
 type UsageSettingsCommandContext = Pick<
@@ -47,13 +57,19 @@ type UsageSettingsCommandDependencies = {
   resolveCredentials?: (
     ctx: UsageSettingsCommandContext,
   ) => Promise<CodexCredentialResolution>;
+  usageClient?: UsageClientPort;
   usageState?: UsageStateStore;
+  usageRefreshCoordinator?: UsageRefreshCoordinator;
   onConfigChanged?: (ctx: UsageSettingsCommandContext) => void | Promise<void>;
 };
 
 type OperationalHealth = {
   status: "ok" | "setup_required" | "auth_failed" | "refresh_failed";
   summary: string;
+};
+
+const defaultUsageClient: UsageClientPort = {
+  fetchUsage: fetchCodexUsage,
 };
 
 export type { UsageSettingsCommandDependencies };
@@ -64,7 +80,16 @@ export function registerOpenAIUsageSettingsCommand(
 ): void {
   const loadConfig = dependencies.loadConfig ?? loadUsageConfig;
   const resolveCredentials = dependencies.resolveCredentials ?? defaultResolveCredentials;
+  const usageClient = dependencies.usageClient ?? defaultUsageClient;
   const usageState = dependencies.usageState ?? createUsageStateStore();
+  const usageRefreshCoordinator =
+    dependencies.usageRefreshCoordinator ??
+    createUsageRefreshCoordinator({ usageClient, usageState });
+  const usageCommandFacade = createUsageCommandFacade({
+    loadConfig,
+    resolveCredentials: (ctx) => resolveCredentials(ctx as UsageSettingsCommandContext),
+    usageRefreshCoordinator,
+  });
   const onConfigChanged = dependencies.onConfigChanged;
 
   pi.registerCommand("openai-usage-settings", {
@@ -82,6 +107,11 @@ export function registerOpenAIUsageSettingsCommand(
       }
 
       const lowered = trimmed.toLowerCase();
+      if (lowered === "usage") {
+        await usageCommandFacade.showUsage(commandContext);
+        return;
+      }
+
       if (lowered === "help") {
         notify(ctx, usageSettingsHelpText());
         return;

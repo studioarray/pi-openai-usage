@@ -15,15 +15,19 @@ import {
   registerOpenAIUsageSettingsCommand,
   type UsageSettingsCommandDependencies,
 } from "../src/usage-settings";
+import { formatUsageStatusLine } from "../src/format";
+import { createUsageRefreshCoordinator, type UsageRefreshCoordinator } from "../src/usage-refresh-coordinator";
 import { parseUsageSnapshot } from "../src/usage-snapshot";
 import { createUsageStateStore, type UsageStateStore } from "../src/usage-state";
 import type { CodexCredentialResolution } from "../src/auth";
+import type { UsageClientPort, UsageFetchResult } from "../src/usage-client";
 
 type RegisteredCommand = (args: string, ctx: ExtensionCommandContext) => Promise<void>;
 
 type SettingsHarness = {
   command: RegisteredCommand;
   ctx: ExtensionCommandContext;
+  usageClient: UsageClientPort;
   usageState: UsageStateStore;
 };
 
@@ -89,10 +93,62 @@ function buildLoadedConfig(effective: UsageConfig): LoadedUsageConfig {
   };
 }
 
+function rawUsageResponse(
+  options: {
+    fiveHourUsedPercent?: number;
+    sevenDayUsedPercent?: number;
+    fiveHourResetAfterSeconds?: number;
+    sevenDayResetAfterSeconds?: number;
+  } = {},
+): unknown {
+  return {
+    rate_limit: {
+      primary_window: {
+        used_percent: options.fiveHourUsedPercent ?? 12,
+        reset_after_seconds: options.fiveHourResetAfterSeconds ?? 300,
+      },
+      secondary_window: {
+        used_percent: options.sevenDayUsedPercent ?? 44,
+        reset_after_seconds: options.sevenDayResetAfterSeconds ?? 600,
+      },
+    },
+  };
+}
+
+function rawUsageResponseWithSparkBucket(): unknown {
+  return {
+    rate_limit: {
+      primary_window: { used_percent: 12, reset_after_seconds: 300 },
+      secondary_window: { used_percent: 44, reset_after_seconds: 600 },
+    },
+    additional_rate_limits: {
+      spark: {
+        limit_name: "GPT-5.3-Codex-Spark",
+        rate_limit: {
+          primary_window: { used_percent: 40, reset_after_seconds: 900 },
+          secondary_window: { used_percent: 30, reset_after_seconds: 1_200 },
+        },
+      },
+    },
+  };
+}
+
+function successfulUsageFetchResult(raw: unknown = rawUsageResponse()): UsageFetchResult {
+  return { ok: true, raw, status: 200 };
+}
+
+function statusLineFromRaw(raw: unknown, config: UsageConfig = DEFAULT_USAGE_CONFIG): string {
+  const snapshot = parseUsageSnapshot(raw, { modelId: "any-openai-model", nowMs: Date.UTC(2026, 0, 1) });
+  return formatUsageStatusLine({ snapshot, config })!;
+}
+
 function createSettingsHarness(options: {
   loadConfig?: () => LoadedUsageConfig;
   resolveCredentials?: () => Promise<CodexCredentialResolution>;
+  usageClient?: UsageClientPort;
+  usageRefreshCoordinator?: UsageRefreshCoordinator;
   usageState?: UsageStateStore;
+  now?: () => Date;
   hasUI?: boolean;
   select?: ReturnType<typeof vi.fn<(title: string, options: string[]) => Promise<string | undefined>>>;
 } = {}): SettingsHarness {
@@ -107,12 +163,24 @@ function createSettingsHarness(options: {
   } as unknown as ExtensionAPI;
 
   const usageState = options.usageState ?? createUsageStateStore();
+  const usageClient = options.usageClient ?? {
+    fetchUsage: vi.fn(async () => successfulUsageFetchResult()),
+  } satisfies UsageClientPort;
+  const usageRefreshCoordinator =
+    options.usageRefreshCoordinator ??
+    createUsageRefreshCoordinator({
+      usageClient,
+      usageState,
+      now: options.now,
+    });
   const dep: UsageSettingsCommandDependencies = {
     loadConfig: options.loadConfig ?? (() => buildLoadedConfig(DEFAULT_USAGE_CONFIG)),
     resolveCredentials: options.resolveCredentials
       ? async () => options.resolveCredentials!()
       : async () => successfulCredentialResolution(),
+    usageClient,
     usageState,
+    usageRefreshCoordinator,
   };
 
   registerOpenAIUsageSettingsCommand(pi, dep);
@@ -136,6 +204,7 @@ function createSettingsHarness(options: {
       throw new Error("Command handler not registered");
     }),
     ctx,
+    usageClient,
     usageState,
   };
 }
@@ -161,6 +230,128 @@ function writeJson(path: string, value: unknown): void {
 }
 
 describe("usage settings command", () => {
+  it("dispatches usage utility to the old no-arg usage query behavior", async () => {
+    const raw = rawUsageResponse();
+    const usageClient = {
+      fetchUsage: vi.fn(async () => successfulUsageFetchResult(raw)),
+    } satisfies UsageClientPort;
+    const { command, ctx } = createSettingsHarness({ usageClient });
+
+    await command("usage", ctx);
+
+    expect(usageClient.fetchUsage).toHaveBeenCalledTimes(1);
+    expect(lastNotifyText(ctx)).toBe(statusLineFromRaw(raw));
+  });
+
+  it("shows fresh cached usage from the usage utility without refreshing", async () => {
+    const raw = rawUsageResponse();
+    const snapshot = parseUsageSnapshot(raw, { modelId: "any-openai-model", nowMs: Date.UTC(2026, 0, 1) });
+    const usageState = createUsageStateStore();
+    usageState.storeSnapshot(snapshot, new Date("2026-01-01T00:00:00.000Z"));
+    const usageClient = {
+      fetchUsage: vi.fn(async () => successfulUsageFetchResult()),
+    } satisfies UsageClientPort;
+    const { command, ctx } = createSettingsHarness({
+      usageClient,
+      usageState,
+      now: () => new Date("2026-01-01T00:00:30.000Z"),
+    });
+
+    await command("usage", ctx);
+
+    expect(usageClient.fetchUsage).not.toHaveBeenCalled();
+    expect(lastNotifyText(ctx)).toBe(formatUsageStatusLine({ snapshot, config: DEFAULT_USAGE_CONFIG }));
+  });
+
+  it("uses the effective refresh interval to decide when cached usage is stale", async () => {
+    const usageState = createUsageStateStore();
+    usageState.storeSnapshot(
+      parseUsageSnapshot(rawUsageResponse(), { modelId: "any-openai-model", nowMs: Date.UTC(2026, 0, 1) }),
+      new Date("2026-01-01T00:00:00.000Z"),
+    );
+    const refreshedRaw = rawUsageResponse({ fiveHourUsedPercent: 33, sevenDayUsedPercent: 22 });
+    const usageClient = {
+      fetchUsage: vi.fn(async () => successfulUsageFetchResult(refreshedRaw)),
+    } satisfies UsageClientPort;
+    let now = new Date("2026-01-01T00:01:00.000Z");
+    const effectiveConfig = { ...DEFAULT_USAGE_CONFIG, refreshIntervalMs: 120_000 };
+    const { command, ctx } = createSettingsHarness({
+      loadConfig: () => buildLoadedConfig(effectiveConfig),
+      usageClient,
+      usageState,
+      now: () => now,
+    });
+
+    await command("usage", ctx);
+    expect(usageClient.fetchUsage).not.toHaveBeenCalled();
+
+    now = new Date("2026-01-01T00:02:00.000Z");
+    await command("usage", ctx);
+
+    expect(usageClient.fetchUsage).toHaveBeenCalledTimes(1);
+    expect(lastNotifyText(ctx)).toBe(statusLineFromRaw(refreshedRaw, effectiveConfig));
+  });
+
+  it("renders refreshed usage with the latest effective config", async () => {
+    const raw = rawUsageResponse();
+    const usageClient = {
+      fetchUsage: vi.fn(async () => successfulUsageFetchResult(raw)),
+    } satisfies UsageClientPort;
+    const latestConfig = {
+      ...DEFAULT_USAGE_CONFIG,
+      display: { ...DEFAULT_USAGE_CONFIG.display, label: "OpenAI", separator: " / " },
+    };
+    const loadConfig = vi
+      .fn<() => LoadedUsageConfig>()
+      .mockReturnValueOnce(buildLoadedConfig(DEFAULT_USAGE_CONFIG))
+      .mockReturnValue(buildLoadedConfig(latestConfig));
+    const { command, ctx } = createSettingsHarness({ loadConfig, usageClient });
+
+    await command("usage", ctx);
+
+    expect(usageClient.fetchUsage).toHaveBeenCalledTimes(1);
+    expect(lastNotifyText(ctx)).toBe(statusLineFromRaw(raw, latestConfig));
+  });
+
+  it("re-renders cached usage for the command context's current model", async () => {
+    const raw = rawUsageResponseWithSparkBucket();
+    const usageClient = {
+      fetchUsage: vi.fn(async () => successfulUsageFetchResult(raw)),
+    } satisfies UsageClientPort;
+    const { command, ctx } = createSettingsHarness({
+      usageClient,
+      now: () => new Date("2026-01-01T00:00:00.000Z"),
+    });
+
+    await command("usage", ctx);
+    expect(lastNotifyText(ctx)).toBe(statusLineFromRaw(raw));
+
+    (ctx as { model: { provider: string; id: string } }).model = {
+      provider: "openai-codex",
+      id: "gpt-5.3-codex-spark",
+    };
+    await command("usage", ctx);
+
+    expect(usageClient.fetchUsage).toHaveBeenCalledTimes(1);
+    expect(lastNotifyText(ctx)).toContain("5h ██████░░░░ 60%");
+    expect(lastNotifyText(ctx)).toContain("7d ███████░░░ 70%");
+  });
+
+  it("shows the existing login-required usage status when credentials are missing", async () => {
+    const usageClient = {
+      fetchUsage: vi.fn(async () => successfulUsageFetchResult()),
+    } satisfies UsageClientPort;
+    const { command, ctx } = createSettingsHarness({
+      resolveCredentials: async () => failedCredentialResolution(),
+      usageClient,
+    });
+
+    await command("usage", ctx);
+
+    expect(usageClient.fetchUsage).not.toHaveBeenCalled();
+    expect(lastNotifyText(ctx)).toBe("Usage login required");
+  });
+
   it("shows healthy operational status and common settings", async () => {
     const usageState = createUsageStateStore();
     const now = new Date("2024-01-01T12:00:00.000Z");
