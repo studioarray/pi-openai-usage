@@ -1,7 +1,18 @@
 import { SettingsList, type SettingItem, type SettingsListTheme } from "@earendil-works/pi-tui";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
-import type { UsageConfig, WindowWidgetConfig, ResetWidgetConfig } from "./config";
+import {
+  APPROVED_BAR_WIDTHS,
+  BAR_STYLE_PRESETS,
+  COLOR_SCHEME_PRESETS,
+  type ApprovedBarWidth,
+  type BarStylePreset,
+  type ColorSchemePreset,
+  type UsageConfig,
+  type UsageConfigPatch,
+  type WindowWidgetConfig,
+  type ResetWidgetConfig,
+} from "./config";
 
 type InteractiveSettingsMenuContext = Pick<ExtensionCommandContext, "ui">;
 
@@ -12,7 +23,24 @@ type PiTheme = {
 type InteractiveSettingsMenuCallbacks = {
   onCancel?: () => void;
   onChange?: (id: string, newValue: string) => void;
+  onPatch?: (patch: UsageConfigPatch) => void;
   theme?: SettingsListTheme;
+};
+
+type SettingPatchBuilder = (value: string) => UsageConfigPatch | undefined;
+
+const DISPLAY_VALUES = ["On", "Off", "Always"] as const;
+type DisplayValue = (typeof DISPLAY_VALUES)[number];
+const BAR_WIDTH_VALUES = APPROVED_BAR_WIDTHS.map(String);
+const BAR_WIDTH_BY_VALUE = new Map<string, ApprovedBarWidth>(
+  APPROVED_BAR_WIDTHS.map((width) => [String(width), width] as const),
+);
+
+const SETTING_PATCH_BUILDERS: Record<string, SettingPatchBuilder> = {
+  display: displayPatchForValue,
+  "color-scheme": colorSchemePatchForValue,
+  "bar-style": barStylePatchForValue,
+  "bar-width": barWidthPatchForValue,
 };
 
 const REFRESH_INTERVAL_LABELS = new Map<number, string>([
@@ -45,9 +73,16 @@ export function createInteractiveSettingsMenu(
     rows,
     rows.length,
     callbacks.theme ?? createSettingsListTheme(),
-    callbacks.onChange ?? (() => undefined),
+    createChangeHandler(callbacks),
     callbacks.onCancel ?? (() => undefined),
   );
+}
+
+export function configPatchForInteractiveSetting(
+  id: string,
+  newValue: string,
+): UsageConfigPatch | undefined {
+  return SETTING_PATCH_BUILDERS[id]?.(newValue);
 }
 
 export function buildInteractiveSettingsRows(config: UsageConfig): SettingItem[] {
@@ -56,21 +91,25 @@ export function buildInteractiveSettingsRows(config: UsageConfig): SettingItem[]
       id: "display",
       label: "Display",
       currentValue: formatDisplayValue(config),
+      values: [...DISPLAY_VALUES],
     },
     {
       id: "color-scheme",
       label: "Color scheme",
       currentValue: formatJsonOnlyCustomValue(config.colors.scheme),
+      values: [...COLOR_SCHEME_PRESETS],
     },
     {
       id: "bar-style",
       label: "Bar style",
       currentValue: formatJsonOnlyCustomValue(config.bar.style),
+      values: [...BAR_STYLE_PRESETS],
     },
     {
       id: "bar-width",
       label: "Bar width",
       currentValue: String(config.bar.width),
+      values: [...BAR_WIDTH_VALUES],
     },
     {
       id: "five-hour-display",
@@ -103,6 +142,65 @@ export function buildInteractiveSettingsRows(config: UsageConfig): SettingItem[]
       currentValue: config.display.showLabel ? "No" : "Yes",
     },
   ];
+}
+
+function createChangeHandler(
+  callbacks: InteractiveSettingsMenuCallbacks,
+): (id: string, newValue: string) => void {
+  return (id, newValue) => {
+    callbacks.onChange?.(id, newValue);
+
+    const patch = configPatchForInteractiveSetting(id, newValue);
+    if (patch !== undefined) callbacks.onPatch?.(patch);
+  };
+}
+
+function displayPatchForValue(value: string): UsageConfigPatch | undefined {
+  if (!isDisplayValue(value)) return undefined;
+
+  switch (value) {
+    case "On":
+      return { enabled: true, display: { showAlways: false } };
+    case "Off":
+      return { enabled: false, display: { showAlways: false } };
+    case "Always":
+      return { enabled: true, display: { showAlways: true } };
+  }
+}
+
+function colorSchemePatchForValue(value: string): UsageConfigPatch | undefined {
+  if (!isColorSchemePreset(value)) return undefined;
+  return { colors: { scheme: value } };
+}
+
+function barStylePatchForValue(value: string): UsageConfigPatch | undefined {
+  if (!isBarStylePreset(value)) return undefined;
+  return { bar: { style: value } };
+}
+
+function barWidthPatchForValue(value: string): UsageConfigPatch | undefined {
+  const width = BAR_WIDTH_BY_VALUE.get(value);
+  if (width === undefined) return undefined;
+  return { bar: { width } };
+}
+
+function isDisplayValue(value: string): value is DisplayValue {
+  return includesString(DISPLAY_VALUES, value);
+}
+
+function isColorSchemePreset(value: string): value is ColorSchemePreset {
+  return includesString(COLOR_SCHEME_PRESETS, value);
+}
+
+function isBarStylePreset(value: string): value is BarStylePreset {
+  return includesString(BAR_STYLE_PRESETS, value);
+}
+
+function includesString<const T extends readonly string[]>(
+  values: T,
+  value: string,
+): value is T[number] {
+  return values.includes(value as T[number]);
 }
 
 function createSettingsListTheme(theme: PiTheme = {}): SettingsListTheme {

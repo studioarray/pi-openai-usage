@@ -363,6 +363,43 @@ describe("configuration store", () => {
     }
   });
 
+  it("accepts display, color, and bar menu patches without discarding JSON-only custom payloads", () => {
+    const { root, cwd } = createTempProject();
+    try {
+      const configPath = join(cwd, ".pi", "extensions", CONFIG_BASENAME);
+      const customColor = {
+        mode: "step",
+        stops: [
+          { percent: 100, color: "success" },
+          { percent: 0, color: "error" },
+        ],
+      };
+      const customBar = { filled: "X", empty: "_", partials: ["a", "b"] };
+      writeJson(configPath, {
+        enabled: false,
+        display: { showAlways: true, label: "Tokens" },
+        colors: { scheme: "custom", custom: customColor },
+        bar: { style: "custom", width: 20, custom: customBar },
+      });
+
+      patchUsageConfig(configPath, {
+        enabled: true,
+        display: { showAlways: false },
+        colors: { scheme: "cyan" },
+        bar: { style: "dots", width: 12 },
+      });
+
+      expect(readJson(configPath)).toEqual({
+        enabled: true,
+        display: { showAlways: false, label: "Tokens" },
+        colors: { scheme: "cyan", custom: customColor },
+        bar: { style: "dots", width: 12, custom: customBar },
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("patches known config fields without discarding unknown fields", () => {
     const { root, cwd } = createTempProject();
     try {

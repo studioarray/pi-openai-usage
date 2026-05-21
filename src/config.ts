@@ -33,8 +33,10 @@ export type ApprovedRefreshIntervalMs = (typeof APPROVED_REFRESH_INTERVALS_MS)[n
 
 const WINDOW_WIDGET_MODES = ["percent", "bar", "bar-percent", "hidden"] as const;
 const RESET_WIDGET_MODES = ["countdown", "clock", "both", "hidden"] as const;
-const BAR_STYLES = ["blocks", "thin", "ascii", "dots", "squares", "braille", "custom"] as const;
-const COLOR_SCHEMES = ["traffic", "cyan", "green", "mono", "none", "custom"] as const;
+export const BAR_STYLE_PRESETS = ["blocks", "thin", "ascii", "dots", "squares", "braille"] as const;
+export const COLOR_SCHEME_PRESETS = ["traffic", "cyan", "green", "mono", "none"] as const;
+const BAR_STYLES = [...BAR_STYLE_PRESETS, "custom"] as const;
+const COLOR_SCHEMES = [...COLOR_SCHEME_PRESETS, "custom"] as const;
 const COLOR_TARGETS = ["value", "widget", "bar", "percent", "none"] as const;
 const COLOR_SCALE_MODES = ["step", "gradient"] as const;
 const BAR_GRADIENT_DIRECTIONS = ["low-to-high", "high-to-low"] as const;
@@ -50,6 +52,8 @@ const PI_THEME_COLOR_TOKENS = [
 
 export type WindowWidgetMode = (typeof WINDOW_WIDGET_MODES)[number];
 export type ResetWidgetMode = (typeof RESET_WIDGET_MODES)[number];
+export type BarStylePreset = (typeof BAR_STYLE_PRESETS)[number];
+export type ColorSchemePreset = (typeof COLOR_SCHEME_PRESETS)[number];
 export type BarStyleName = (typeof BAR_STYLES)[number];
 export type ColorSchemeName = (typeof COLOR_SCHEMES)[number];
 export type ColorTarget = (typeof COLOR_TARGETS)[number];
