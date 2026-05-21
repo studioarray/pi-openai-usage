@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
@@ -279,7 +279,7 @@ describe("usage status controller", () => {
     await startSession;
   });
 
-  it("reapplies status immediately when the settings command disables usage", async () => {
+  it("does not reapply status or mutate config from the removed settings set path", async () => {
     const root = mkdtempSync(join(tmpdir(), "pi-openai-usage-settings-reapply-"));
     const project = join(root, "project");
     const previousCwd = process.cwd();
@@ -289,9 +289,11 @@ describe("usage status controller", () => {
 
     try {
       mkdirSync(join(project, ".pi", "extensions"), { recursive: true });
+      const configPath = join(project, ".pi", "extensions", "pi-openai-usage.json");
+      const initialConfig = { ...DEFAULT_USAGE_CONFIG, enabled: true };
       writeFileSync(
-        join(project, ".pi", "extensions", "pi-openai-usage.json"),
-        `${JSON.stringify({ ...DEFAULT_USAGE_CONFIG, enabled: true }, null, 2)}\n`,
+        configPath,
+        `${JSON.stringify(initialConfig, null, 2)}\n`,
         "utf8",
       );
       process.chdir(project);
@@ -330,7 +332,12 @@ describe("usage status controller", () => {
 
       await settingsCommand?.("set enabled false", ctx);
 
-      expect(ctx.ui.setStatus).toHaveBeenLastCalledWith("openai-usage", undefined);
+      expect(ctx.ui.notify).toHaveBeenLastCalledWith(
+        expect.stringContaining("Slash-command setting writes were removed"),
+        "info",
+      );
+      expect(JSON.parse(readFileSync(configPath, "utf8")) as unknown).toEqual(initialConfig);
+      expect(ctx.ui.setStatus).toHaveBeenLastCalledWith("openai-usage", "Usage login required");
     } finally {
       process.chdir(previousCwd);
       if (previousAgentDir === undefined) {

@@ -24,9 +24,14 @@ import type { CodexCredentialResolution } from "../src/auth";
 import type { UsageClientPort, UsageFetchError, UsageFetchResult } from "../src/usage-client";
 
 type RegisteredCommand = (args: string, ctx: ExtensionCommandContext) => Promise<void>;
+type ArgumentCompletion = { value: string; label?: string };
+type ArgumentCompletionProvider = (
+  argumentPrefix: string,
+) => ArgumentCompletion[] | null | Promise<ArgumentCompletion[] | null>;
 
 type SettingsHarness = {
   command: RegisteredCommand;
+  getArgumentCompletions: ArgumentCompletionProvider;
   ctx: ExtensionCommandContext;
   usageClient: UsageClientPort;
   usageState: UsageStateStore;
@@ -168,11 +173,13 @@ function createSettingsHarness(options: {
   select?: ReturnType<typeof vi.fn<(title: string, options: string[]) => Promise<string | undefined>>>;
 } = {}): SettingsHarness {
   let command: RegisteredCommand | undefined;
+  let getArgumentCompletions: ArgumentCompletionProvider | undefined;
 
   const pi = {
-    registerCommand: vi.fn((name: string, definition: { handler: RegisteredCommand }) => {
+    registerCommand: vi.fn((name: string, definition: { handler: RegisteredCommand; getArgumentCompletions?: ArgumentCompletionProvider }) => {
       if (name === "openai-usage-settings") {
         command = definition.handler;
+        getArgumentCompletions = definition.getArgumentCompletions;
       }
     }),
   } as unknown as ExtensionAPI;
@@ -218,6 +225,9 @@ function createSettingsHarness(options: {
     command: command ?? (async () => {
       throw new Error("Command handler not registered");
     }),
+    getArgumentCompletions: getArgumentCompletions ?? (() => {
+      throw new Error("Command completions not registered");
+    }),
     ctx,
     usageClient,
     usageState,
@@ -245,6 +255,21 @@ function writeJson(path: string, value: unknown): void {
 }
 
 describe("usage settings command", () => {
+  it("completes only supported utility subcommands", async () => {
+    const { getArgumentCompletions } = createSettingsHarness();
+
+    await expect(Promise.resolve(getArgumentCompletions(""))).resolves.toEqual([
+      { value: "usage", label: "usage" },
+      { value: "refresh", label: "refresh" },
+      { value: "diagnostics", label: "diagnostics" },
+      { value: "help", label: "help" },
+    ]);
+    await expect(Promise.resolve(getArgumentCompletions("d"))).resolves.toEqual([
+      { value: "diagnostics", label: "diagnostics" },
+    ]);
+    await expect(Promise.resolve(getArgumentCompletions("s"))).resolves.toBeNull();
+  });
+
   it("dispatches usage utility to the old no-arg usage query behavior", async () => {
     const raw = rawUsageResponse();
     const usageClient = {
@@ -530,39 +555,24 @@ describe("usage settings command", () => {
     expect(lastNotifyText(ctx)).toBe("Usage login required");
   });
 
-  it("shows healthy operational status and common settings", async () => {
-    const usageState = createUsageStateStore();
-    const now = new Date("2024-01-01T12:00:00.000Z");
-    usageState.storeSnapshot(
-      parseUsageSnapshot({
-        rate_limit: {
-          primary_window: { used_percent: 13, reset_after_seconds: 100 },
-          secondary_window: { used_percent: 27, reset_after_seconds: 1_000 },
-        },
-      }),
-      now,
-    );
-
-    const { command, ctx } = createSettingsHarness({
-      usageState,
-    });
+  it("shows a read-only non-UI fallback for no-args", async () => {
+    const loadConfig = vi.fn(() => buildLoadedConfig(DEFAULT_USAGE_CONFIG));
+    const resolveCredentials = vi.fn(async () => successfulCredentialResolution());
+    const { command, ctx } = createSettingsHarness({ loadConfig, resolveCredentials });
 
     await command("", ctx);
 
     const text = lastNotifyText(ctx);
-    expect(text).toContain("openai-usage settings");
-    expect(text).toContain("status: OK");
-    expect(text).toContain("last refreshed: 2024-01-01T12:00:00.000Z");
-    expect(text).toContain("enabled: yes");
-    expect(text).toContain("display.showAlways");
-    expect(text).toContain("display.showLabel");
-    expect(text).toContain("display.label");
-    expect(text).toContain("display.separator");
-    expect(text).toContain("widgets.fiveHour.mode:");
-    expect(text).toContain("bar.style:");
-    expect(text).toContain("colors.scheme:");
-    expect(text).not.toContain("Raw project config:");
-    expect(text).not.toContain("Raw global config:");
+    expect(text).toContain("Interactive settings require UI");
+    expect(text).toContain("/openai-usage-settings usage");
+    expect(text).toContain("/openai-usage-settings refresh");
+    expect(text).toContain("/openai-usage-settings diagnostics");
+    expect(text).toContain("/openai-usage-settings help");
+    expect(text).not.toMatch(/^\s*set\b/m);
+    expect(text).not.toMatch(/^\s*show\b/m);
+    expect(text).not.toMatch(/^\s*debug\b/m);
+    expect(loadConfig).not.toHaveBeenCalled();
+    expect(resolveCredentials).not.toHaveBeenCalled();
   });
 
   it("does not expose diagnostics from the interactive settings picker", async () => {
@@ -581,47 +591,60 @@ describe("usage settings command", () => {
     expect(lastNotifyText(ctx)).toContain("openai-usage settings");
   });
 
-  it("help text does not expose fast-mode controls", async () => {
+  it("help describes the one-command surface", async () => {
     const { command, ctx } = createSettingsHarness();
 
     await command("help", ctx);
 
     const text = lastNotifyText(ctx);
-    expect(text).toContain("/openai-usage-settings");
-    expect(text).toContain("Available subcommands:");
+    expect(text).toContain("/openai-usage-settings is the only OpenAI usage/settings command");
+    expect(text).toContain("  usage");
+    expect(text).toContain("  refresh");
+    expect(text).toContain("  diagnostics");
+    expect(text).toContain("  help");
+    expect(text).toContain("Common settings are interactive through no-args /openai-usage-settings");
+    expect(text).toContain("Advanced settings are JSON-file-only");
+    expect(text).not.toMatch(/^\s*set\b/m);
+    expect(text).not.toMatch(/^\s*show\b/m);
+    expect(text).not.toMatch(/^\s*debug\b/m);
     expect(text).not.toContain("fast");
     expect(text).not.toContain("service_tier");
     expect(text).not.toContain("pi-openai-fast");
   });
 
-  it("does not accept fast-mode setting keys", async () => {
+  it("does not accept show or debug as aliases", async () => {
+    const loadConfig = vi.fn(() => buildLoadedConfig(DEFAULT_USAGE_CONFIG));
+    const { command, ctx } = createSettingsHarness({ loadConfig });
+
+    await command("show", ctx);
+    const showText = lastNotifyText(ctx);
+    expect(showText).toContain("removed");
+    expect(showText).toContain("/openai-usage-settings help");
+    expect(showText).not.toContain("openai-usage settings");
+
+    await command("debug", ctx);
+    const debugText = lastNotifyText(ctx);
+    expect(debugText).toContain("not a diagnostics alias");
+    expect(debugText).toContain("/openai-usage-settings diagnostics");
+    expect(debugText).toContain("/openai-usage-settings help");
+    expect(debugText).not.toContain("openai-usage diagnostics");
+
+    expect(loadConfig).not.toHaveBeenCalled();
+  });
+
+  it("points unknown subcommands to help", async () => {
     const { command, ctx } = createSettingsHarness();
 
-    await command("set fast-mode true", ctx);
+    await command("bogus", ctx);
 
     const text = lastNotifyText(ctx);
-    expect(text).toContain("Invalid /openai-usage-settings usage.");
+    expect(text).toContain("Unknown /openai-usage-settings subcommand");
+    expect(text).toContain("/openai-usage-settings help");
   });
 
-  it("reports setup-required status when auth is missing", async () => {
-    const { command, ctx } = createSettingsHarness({
-      resolveCredentials: async () => failedCredentialResolution(),
-    });
-
-    await command("", ctx);
-
-    const text = lastNotifyText(ctx);
-    expect(text).toContain("status: SETUP");
-    expect(text).toContain("/login openai-codex");
-    expect(text).not.toContain("Auth source: none");
-    expect(text).not.toContain("Raw project config:");
-  });
-
-  it("updates a common setting and preserves unknown config fields", async () => {
+  it("treats set as a removed non-mutating path", async () => {
     const { cwd, home, root } = createTempProject();
     const projectConfigPath = join(cwd, ".pi", "extensions", CONFIG_BASENAME);
-    const homeConfigPath = join(home, ".pi", "agent", "extensions", CONFIG_BASENAME);
-
     const initialProjectConfig = {
       ...DEFAULT_USAGE_CONFIG,
       experimental: {
@@ -634,173 +657,21 @@ describe("usage settings command", () => {
     };
     writeJson(projectConfigPath, initialProjectConfig);
 
+    const loadConfig = vi.fn(() => loadUsageConfig({ cwd, home }));
     const { command, ctx } = createSettingsHarness({
-      loadConfig: () => loadUsageConfig({ cwd, home }),
+      loadConfig,
     });
 
     await command("set bar.width 15", ctx);
-    const updatedText = lastNotifyText(ctx);
-    expect(updatedText).toContain('Updated setting: bar.width = 15');
-    expect(updatedText).toContain('bar.width: 15');
-
-    const persisted = JSON.parse(readFileSync(projectConfigPath, "utf8")) as Record<string, unknown>;
-    expect((persisted.experimental as { keep?: unknown }).keep).toBe(true);
-    expect((persisted as { bar?: { width?: unknown } }).bar?.width).toBe(15);
-    expect((persisted as { display?: { label?: unknown } }).display?.label).toBe("before-change");
-
-    rmSync(root, { recursive: true, force: true });
-    rmSync(homeConfigPath, { recursive: true, force: true });
-  });
-
-  it("shows refresh-failed operational status when current error exists", async () => {
-    const usageState = createUsageStateStore();
-    usageState.recordFetchAttempt(new Date("2024-01-01T12:05:00.000Z"));
-    usageState.recordFetchError({ kind: "network", message: "temporary outage", status: 503 });
-
-    const { command, ctx } = createSettingsHarness({
-      usageState,
-    });
-
-    await command("show", ctx);
 
     const text = lastNotifyText(ctx);
-    expect(text).toContain("status: REFRESH_FAILED");
-    expect(text).toContain("currentError: network (503)");
-    expect(text).toContain("currentErrorMessage: temporary outage");
-  });
+    expect(text).toContain("Slash-command setting writes were removed");
+    expect(text).toContain("settings are interactive now");
+    expect(text).toMatch(/advanced settings can be edited in the JSON config file/i);
 
-  it("supports advanced JSON editing for colors.custom", async () => {
-    const { cwd, home, root } = createTempProject();
-    const projectConfigPath = join(cwd, ".pi", "extensions", CONFIG_BASENAME);
-
-    writeJson(projectConfigPath, {
-      ...DEFAULT_USAGE_CONFIG,
-      experimental: {
-        note: "keep",
-      },
-    });
-
-    const { command, ctx } = createSettingsHarness({
-      loadConfig: () => loadUsageConfig({ cwd, home }),
-    });
-
-    const json = `[{"percent": 99, "color": "#123456", "label": "high"}, {"percent": 0, "color": "error"}]`;
-    await command(`set colors.custom "${json}"`, ctx);
-
-    const text = lastNotifyText(ctx);
-    expect(text).toContain(`Updated setting: colors.custom = "${json}"`);
-
+    expect(loadConfig).not.toHaveBeenCalled();
     const persisted = JSON.parse(readFileSync(projectConfigPath, "utf8")) as Record<string, unknown>;
-    const custom = (persisted as { colors?: { custom?: { mode?: string; stops?: unknown[] } } }).colors?.custom;
-    expect(custom?.mode).toBe("step");
-    expect(custom?.stops).toEqual([
-      { percent: 99, color: "#123456", label: "high" },
-      { percent: 0, color: "error" },
-    ]);
-    expect((persisted as { experimental?: { note?: unknown } }).experimental?.note).toBe("keep");
-
-    rmSync(root, { recursive: true, force: true });
-  });
-
-  it("preserves existing custom color stops when updating only colors.custom mode", async () => {
-    const { cwd, home, root } = createTempProject();
-    const projectConfigPath = join(cwd, ".pi", "extensions", CONFIG_BASENAME);
-
-    const initialCustomStops = [
-      { percent: 99, color: "#123456", label: "high" },
-      { percent: 0, color: 255 },
-    ];
-
-    writeJson(projectConfigPath, {
-      ...DEFAULT_USAGE_CONFIG,
-      colors: {
-        ...DEFAULT_USAGE_CONFIG.colors,
-        custom: {
-          mode: "step",
-          stops: initialCustomStops,
-        },
-      },
-    });
-
-    const { command, ctx } = createSettingsHarness({
-      loadConfig: () => loadUsageConfig({ cwd, home }),
-    });
-
-    await command('set colors.custom \'{"mode":"gradient"}\'', ctx);
-
-    const text = lastNotifyText(ctx);
-    expect(text).toContain('Updated setting: colors.custom = \'{"mode":"gradient"}\'');
-
-    const persisted = JSON.parse(readFileSync(projectConfigPath, "utf8")) as Record<string, unknown>;
-    const custom = (persisted as { colors?: { custom?: { mode?: string; stops?: unknown[] } } }).colors?.custom;
-    expect(custom?.mode).toBe("gradient");
-    expect(custom?.stops).toEqual(initialCustomStops);
-
-    rmSync(root, { recursive: true, force: true });
-  });
-
-  it("supports advanced JSON editing for bar.custom", async () => {
-    const { cwd, home, root } = createTempProject();
-    const projectConfigPath = join(cwd, ".pi", "extensions", CONFIG_BASENAME);
-
-    writeJson(projectConfigPath, DEFAULT_USAGE_CONFIG);
-
-    const { command, ctx } = createSettingsHarness({
-      loadConfig: () => loadUsageConfig({ cwd, home }),
-    });
-
-    const json = '{"filled": "█", "empty": "-", "partials": ["+"]}';
-    await command(`set bar.custom '${json}'`, ctx);
-
-    const text = lastNotifyText(ctx);
-    expect(text).toContain("Updated setting: bar.custom = '" + json + "'");
-
-    const persisted = JSON.parse(readFileSync(projectConfigPath, "utf8")) as Record<string, unknown>;
-    const custom = (persisted as { bar?: { custom?: { filled?: string; empty?: string; partials?: string[] } } }).bar?.custom;
-    expect(custom?.filled).toBe("█");
-    expect(custom?.empty).toBe("-");
-    expect(custom?.partials).toEqual(["+"]);
-
-    rmSync(root, { recursive: true, force: true });
-  });
-
-  it("supports full JSON config editing and rejects invalid values", async () => {
-    const { cwd, home, root } = createTempProject();
-    const projectConfigPath = join(cwd, ".pi", "extensions", CONFIG_BASENAME);
-
-    writeJson(projectConfigPath, {
-      ...DEFAULT_USAGE_CONFIG,
-      experimental: {
-        keep: true,
-      },
-      colors: {
-        ...DEFAULT_USAGE_CONFIG.colors,
-        custom: {
-          mode: "step",
-          stops: DEFAULT_USAGE_CONFIG.colors.custom.stops,
-        },
-      },
-    });
-
-    const { command, ctx } = createSettingsHarness({
-      loadConfig: () => loadUsageConfig({ cwd, home }),
-    });
-
-    const valid = '{"enabled":false,"bar":{"width":20,"custom":{"filled":"#","empty":"."},"style":"ascii"},"colors":{"custom":{"mode":"gradient","stops":[{"percent":100,"color":"#111111"},{"percent":0,"color":"#222222"}]}}}';
-    await command(`set config ${valid}`, ctx);
-
-    let text = lastNotifyText(ctx);
-    expect(text).toContain("Updated setting: config = " + valid);
-
-    const persisted = JSON.parse(readFileSync(projectConfigPath, "utf8")) as Record<string, unknown>;
-    expect((persisted as { enabled?: boolean }).enabled).toBe(false);
-    expect((persisted as { bar?: { width?: number } }).bar?.width).toBe(20);
-    expect((persisted as { bar?: { custom?: { filled?: string } } }).bar?.custom?.filled).toBe("#");
-    expect((persisted as { experimental?: { keep?: unknown } }).experimental?.keep).toBe(true);
-
-    await command("set config {\"refreshIntervalMs\": 1}", ctx);
-    text = lastNotifyText(ctx);
-    expect(text).toContain("Invalid /openai-usage-settings usage.");
+    expect(persisted).toEqual(initialProjectConfig);
 
     rmSync(root, { recursive: true, force: true });
   });
@@ -914,77 +785,4 @@ describe("usage settings command", () => {
     expect(text).toContain("Has account ID: no");
   });
 
-  it("rejects invalid advanced JSON payloads", async () => {
-    const { cwd, home, root } = createTempProject();
-    const projectConfigPath = join(cwd, ".pi", "extensions", CONFIG_BASENAME);
-    const original = {
-      ...DEFAULT_USAGE_CONFIG,
-      experimental: {
-        keep: true,
-      },
-    };
-    writeJson(projectConfigPath, original);
-
-    const { command, ctx } = createSettingsHarness({
-      loadConfig: () => loadUsageConfig({ cwd, home }),
-    });
-
-    await command('set config {"enabled": true', ctx);
-
-    const text = lastNotifyText(ctx);
-    expect(text).toContain("Invalid /openai-usage-settings usage.");
-
-    const persisted = JSON.parse(readFileSync(projectConfigPath, "utf8")) as Record<string, unknown>;
-    expect(persisted).toEqual(original);
-
-    rmSync(root, { recursive: true, force: true });
-  });
-
-  it("rejects invalid advanced JSON values without applying partial changes", async () => {
-    const { cwd, home, root } = createTempProject();
-    const projectConfigPath = join(cwd, ".pi", "extensions", CONFIG_BASENAME);
-    const original = {
-      ...DEFAULT_USAGE_CONFIG,
-      colors: {
-        ...DEFAULT_USAGE_CONFIG.colors,
-        custom: {
-          mode: "step",
-          stops: [{ percent: 100, color: "success" }],
-        },
-      },
-    };
-    writeJson(projectConfigPath, original);
-
-    const { command, ctx } = createSettingsHarness({
-      loadConfig: () => loadUsageConfig({ cwd, home }),
-    });
-
-    await command(`set colors.custom '[{"percent":100,"color":true}]'`, ctx);
-
-    const text = lastNotifyText(ctx);
-    expect(text).toContain("Invalid /openai-usage-settings usage.");
-
-    const persisted = JSON.parse(readFileSync(projectConfigPath, "utf8")) as Record<string, unknown>;
-    expect(persisted).toEqual(original);
-
-    rmSync(root, { recursive: true, force: true });
-  });
-
-  it("rejects malformed integer settings values", async () => {
-    const { command, ctx } = createSettingsHarness();
-
-    await command("set refreshIntervalMs 12abc", ctx);
-
-    const text = lastNotifyText(ctx);
-    expect(text).toContain("Invalid /openai-usage-settings usage.");
-  });
-
-  it("rejects out-of-range common refresh interval settings", async () => {
-    const { command, ctx } = createSettingsHarness();
-
-    await command("set refreshIntervalMs 1", ctx);
-
-    const text = lastNotifyText(ctx);
-    expect(text).toContain("Invalid /openai-usage-settings usage.");
-  });
 });

@@ -1,6 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { registerOpenAIUsageCommand } from "./src/usage-command";
 import { registerOpenAIUsageSettingsCommand } from "./src/usage-settings";
 import {
   createUsageRefreshCoordinator,
@@ -18,21 +17,15 @@ export default function piOpenAIUsage(pi: ExtensionAPI): void {
     usageState,
   });
 
-  const usageStatusController = registerUsageStatusController(pi, {
+  registerUsageStatusController(pi, {
     usageClient,
     usageState,
     usageRefreshCoordinator,
   });
   if (typeof (pi as { registerCommand?: unknown }).registerCommand === "function") {
-    registerOpenAIUsageCommand(pi, {
-      usageClient,
-      usageState,
-      usageRefreshCoordinator,
-    });
     registerOpenAIUsageSettingsCommand(pi, {
       usageState,
       usageRefreshCoordinator,
-      onConfigChanged: (ctx) => usageStatusController.reapply(ctx),
     });
   }
 }
