@@ -14,7 +14,7 @@ Usage: 5h ████████░░ 88% | 7d ███████░░░
 ## Install
 
 ```bash
-pi install git:github.com/studioarray/pi-openai-usage
+pi install npm:pi-openai-usage
 ```
 
 ## Login
