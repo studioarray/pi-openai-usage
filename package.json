@@ -1,6 +1,6 @@
 {
   "name": "pi-openai-usage",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Focused Pi extension package for showing OpenAI Codex subscription usage in the status line.",
   "type": "module",
   "license": "MIT",
