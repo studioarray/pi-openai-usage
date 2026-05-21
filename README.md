@@ -20,45 +20,43 @@ This extension uses Pi's existing OpenAI Codex login. If you have not logged in 
 /login openai-codex
 ```
 
-## Commands
+## Command
 
-### Usage
+`/openai-usage-settings` is the one public command for OpenAI usage and settings.
 
-```text
-/openai-usage
-/openai-usage refresh
-/openai-usage debug
-/openai-usage help
-```
+Run it with no arguments in Pi's interactive UI to open the settings menu. In non-UI runs, it shows a read-only fallback with the available utility subcommands.
 
-| Command | What it does |
+### Utility subcommands
+
+Use utility subcommands when you want a direct status check, refresh, diagnostics, or help:
+
+| Subcommand | What it does |
 | --- | --- |
-| `/openai-usage` | Show cached usage, refreshing first if needed. |
-| `/openai-usage refresh` | Force a usage refresh. |
-| `/openai-usage debug` | Show config paths, auth diagnostics, timestamps, and the last error. |
-| `/openai-usage help` | Show command help. |
+| `usage` | Show cached usage, refreshing first if the cache is missing or stale. |
+| `refresh` | Force a usage refresh and show the updated usage status. |
+| `diagnostics` | Show setup, auth, config-path, timestamp, and last-error diagnostics without printing tokens. |
+| `help` | Show command help for the one-command workflow. |
 
-### Settings
+Example form: `/openai-usage-settings usage`.
 
-```text
-/openai-usage-settings
-/openai-usage-settings show
-/openai-usage-settings diagnostics
-/openai-usage-settings set <key> <value>
-/openai-usage-settings help
-```
+### Interactive settings menu
 
-Useful examples:
+Running `/openai-usage-settings` with no arguments opens a ten-row menu for common settings:
 
-```text
-/openai-usage-settings set display.showAlways true
-/openai-usage-settings set display.showLabel false
-/openai-usage-settings set display.label OpenAI
-/openai-usage-settings set bar.style dots
-/openai-usage-settings set bar.width 8
-/openai-usage-settings set colors.scheme none
-/openai-usage-settings set widgets.sevenDayReset.enabled false
-```
+| Row | Visible values |
+| --- | --- |
+| Display | `On`, `Off`, `Always` |
+| Color scheme | `traffic`, `cyan`, `green`, `mono`, `none` |
+| Bar style | `blocks`, `thin`, `ascii`, `dots`, `squares`, `braille` |
+| Bar width | `4`, `6`, `8`, `10`, `12`, `16`, `20` |
+| 5h display | `hidden`, `percent`, `bar`, `bar + percent` |
+| 7d display | `hidden`, `percent`, `bar`, `bar + percent` |
+| 5h reset display | `hidden`, `countdown`, `clock`, `both` |
+| 7d reset display | `hidden`, `countdown`, `clock`, `both` |
+| Refresh interval | `15s`, `30s`, `1m`, `2m`, `5m`, `10m` |
+| Hide label | `No`, `Yes` |
+
+`Display` controls whether the status line is shown normally, hidden, or always shown. `Hide label` controls the `Usage:` prefix. If a JSON config uses a custom color scheme or custom bar style, the menu may show `custom (JSON)` as the current value; selecting a preset replaces it with that preset.
 
 ## Configuration files
 
@@ -69,19 +67,7 @@ Configuration is read from:
 
 Project config overrides global config.
 
-Common settings include:
-
-- `enabled`
-- `refreshIntervalMs`
-- `display.showAlways`
-- `display.showLabel`
-- `display.label`
-- `display.separator`
-- widget visibility and modes for the 5h, 7d, and reset displays
-- `bar.style`, `bar.width`, `bar.partials`
-- `colors.scheme`, `colors.target`, and bar-gradient settings
-
-Advanced settings such as custom colors, custom bars, and full config patches are available through `/openai-usage-settings set` with JSON values.
+Use the interactive menu for common display settings. Advanced visual customization is JSON-file-only: edit the project or global config file for custom label text, widget labels, separators, partial bars, custom bar glyphs, custom color stops or targets, and bar-gradient controls. Slash-command setting writes are not supported.
 
 ## Display customization
 
@@ -91,15 +77,13 @@ The default display uses progress bars and percentages:
 Usage: 5h ████████░░ 88% | 7d ███████░░░ 73% | 5h ↺ 42m | 7d ↺ 2d4h
 ```
 
-You can simplify it:
+To simplify it in the interactive menu, set:
 
-```text
-/openai-usage-settings set display.showLabel false
-/openai-usage-settings set widgets.fiveHour.mode percent
-/openai-usage-settings set widgets.sevenDay.mode percent
-/openai-usage-settings set widgets.fiveHourReset.enabled false
-/openai-usage-settings set widgets.sevenDayReset.enabled false
-```
+- Hide label: `Yes`
+- 5h display: `percent`
+- 7d display: `percent`
+- 5h reset display: `hidden`
+- 7d reset display: `hidden`
 
 Result:
 
@@ -107,11 +91,7 @@ Result:
 5h: 88% | 7d: 73%
 ```
 
-Disable colors with:
-
-```text
-/openai-usage-settings set colors.scheme none
-```
+To disable colors, set Color scheme to `none`.
 
 ## Attribution
 
