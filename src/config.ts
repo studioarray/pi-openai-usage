@@ -183,11 +183,11 @@ export type UsageConfigPatch = {
 };
 
 const DEFAULT_COLOR_STOPS: ColorStop[] = [
-  { percent: 80, color: "success", label: "success" },
-  { percent: 60, color: "#65a30d", label: "lime/olive" },
-  { percent: 40, color: "warning", label: "warning" },
-  { percent: 20, color: "#c2410c", label: "orange" },
-  { percent: 0, color: "error", label: "error" },
+  { percent: 80, color: "#22c55e", label: "green" },
+  { percent: 60, color: "#84cc16", label: "lime" },
+  { percent: 40, color: "#eab308", label: "yellow" },
+  { percent: 20, color: "#f97316", label: "orange" },
+  { percent: 0, color: "#ef4444", label: "red" },
 ];
 
 export const DEFAULT_USAGE_CONFIG: UsageConfig = {

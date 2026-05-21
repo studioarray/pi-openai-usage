@@ -145,15 +145,15 @@ Use the interactive menu for common display settings. Advanced visual customizat
 | `colors.custom.mode` | string | `"step"` | `step`, `gradient`. |
 | `colors.custom.stops` | array | see below | Array of color stops sorted by `percent`. |
 
-Default `colors.custom.stops`:
+Default `colors.custom.stops` (matching the built-in traffic scheme):
 
 | percent | color | label |
 | --- | --- | --- |
-| `80` | `success` | `success` |
-| `60` | `#65a30d` | `lime/olive` |
-| `40` | `warning` | `warning` |
-| `20` | `#c2410c` | `orange` |
-| `0` | `error` | `error` |
+| `80` | `#22c55e` | `green` |
+| `60` | `#84cc16` | `lime` |
+| `40` | `#eab308` | `yellow` |
+| `20` | `#f97316` | `orange` |
+| `0` | `#ef4444` | `red` |
 
 Each custom color stop has this shape:
 

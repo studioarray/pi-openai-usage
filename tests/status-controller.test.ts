@@ -906,10 +906,10 @@ describe("usage status controller", () => {
 
     expect(harness.ctx.ui.setStatus).toHaveBeenCalledWith(
       "openai-usage",
-      "<dim>Usage: \x1b[39m<dim>5h: \x1b[39m<success>88%\x1b[39m",
+      "<dim>Usage: \x1b[39m<dim>5h: \x1b[39m\x1b[38;2;34;197;94m88%\x1b[39m",
     );
     expect(theme.fg).toHaveBeenCalledWith("dim", "Usage: ");
-    expect(theme.fg).toHaveBeenCalledWith("success", "88%");
+    expect(theme.getColorMode).toHaveBeenCalled();
   });
 
   it("preserves cached usage while hidden and renders it immediately when visible again", async () => {
@@ -1084,9 +1084,14 @@ describe("usage status controller", () => {
     expect(usageClient.fetchUsage).toHaveBeenCalledTimes(1);
     expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "openai-usage",
-      expect.stringContaining("<light:success>"),
+      expect.stringContaining("<light:dim>Usage: "),
+    );
+    expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+      "openai-usage",
+      expect.stringContaining("\x1b[38;2;34;197;94m"),
     );
     expect(lightTheme.fg).toHaveBeenCalled();
+    expect(lightTheme.getColorMode).toHaveBeenCalled();
   });
 
   it("clears the status entry when a visible refresh has no displayable usage values", async () => {

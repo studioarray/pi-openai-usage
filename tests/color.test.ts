@@ -29,18 +29,26 @@ function fakeTheme(options: { name?: string; colorMode?: "truecolor" | "256color
 }
 
 describe("colorizeUsageText", () => {
-  it("uses Pi theme tokens for traffic scheme colors", () => {
-    const theme = fakeTheme();
+  it("uses explicit visually distinct traffic step colors", () => {
+    const theme = fakeTheme({ colorMode: "truecolor" });
+    const colors = colorConfig({ scheme: "traffic" });
 
-    const text = colorizeUsageText({
-      text: "88%",
-      percent: 88,
-      colors: colorConfig({ scheme: "traffic" }),
-      theme,
-    });
-
-    expect(text).toBe("<success>88%\x1b[39m");
-    expect(theme.fg).toHaveBeenCalledWith("success", "88%");
+    expect(colorizeUsageText({ text: "88%", percent: 88, colors, theme })).toBe(
+      "\x1b[38;2;34;197;94m88%\x1b[39m",
+    );
+    expect(colorizeUsageText({ text: "70%", percent: 70, colors, theme })).toBe(
+      "\x1b[38;2;132;204;22m70%\x1b[39m",
+    );
+    expect(colorizeUsageText({ text: "50%", percent: 50, colors, theme })).toBe(
+      "\x1b[38;2;234;179;8m50%\x1b[39m",
+    );
+    expect(colorizeUsageText({ text: "30%", percent: 30, colors, theme })).toBe(
+      "\x1b[38;2;249;115;22m30%\x1b[39m",
+    );
+    expect(colorizeUsageText({ text: "10%", percent: 10, colors, theme })).toBe(
+      "\x1b[38;2;239;68;68m10%\x1b[39m",
+    );
+    expect(theme.fg).not.toHaveBeenCalled();
   });
 
   it("uses active theme name to choose light and dark built-in variants", () => {

@@ -39,11 +39,11 @@ const PI_THEME_COLOR_TOKENS = new Set<PiThemeColorToken>([
 ]);
 
 const TRAFFIC_STOPS: ColorStop[] = [
-  { percent: 80, color: "success" },
-  { percent: 60, color: "#65a30d" },
-  { percent: 40, color: "warning" },
-  { percent: 20, color: "#c2410c" },
-  { percent: 0, color: "error" },
+  { percent: 80, color: "#22c55e" },
+  { percent: 60, color: "#84cc16" },
+  { percent: 40, color: "#eab308" },
+  { percent: 20, color: "#f97316" },
+  { percent: 0, color: "#ef4444" },
 ];
 
 const CYAN_DARK_STOPS: ColorStop[] = [

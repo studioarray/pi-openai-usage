@@ -255,7 +255,7 @@ describe("formatUsageStatusLine", () => {
     });
 
     expect(text).toBe(
-      "<dim>Usage: \x1b[39m<dim>5h: \x1b[39m<success>88%\x1b[39m<dim> | \x1b[39m<dim>5h ↺ 42m\x1b[39m",
+      "<dim>Usage: \x1b[39m<dim>5h: \x1b[39m\x1b[38;2;34;197;94m88%\x1b[39m<dim> | \x1b[39m<dim>5h ↺ 42m\x1b[39m",
     );
   });
 
@@ -275,7 +275,7 @@ describe("formatUsageStatusLine", () => {
     });
 
     expect(text).toBe(
-      "<dim>Usage: \x1b[39m<success>5h: 88%\x1b[39m<dim> | \x1b[39m<dim>5h ↺ 42m\x1b[39m",
+      "<dim>Usage: \x1b[39m\x1b[38;2;34;197;94m5h: 88%\x1b[39m<dim> | \x1b[39m<dim>5h ↺ 42m\x1b[39m",
     );
   });
 
@@ -299,7 +299,7 @@ describe("formatUsageStatusLine", () => {
         theme: fakeTheme(),
       }),
     ).toBe(
-      "<dim>Usage: \x1b[39m<dim>5h \x1b[39m<success>####\x1b[39m<dim> \x1b[39m<dim>88%\x1b[39m",
+      "<dim>Usage: \x1b[39m<dim>5h \x1b[39m\x1b[38;2;34;197;94m####\x1b[39m<dim> \x1b[39m<dim>88%\x1b[39m",
     );
 
     expect(
@@ -313,7 +313,7 @@ describe("formatUsageStatusLine", () => {
         theme: fakeTheme(),
       }),
     ).toBe(
-      "<dim>Usage: \x1b[39m<dim>5h \x1b[39m<dim>####\x1b[39m<dim> \x1b[39m<success>88%\x1b[39m",
+      "<dim>Usage: \x1b[39m<dim>5h \x1b[39m<dim>####\x1b[39m<dim> \x1b[39m\x1b[38;2;34;197;94m88%\x1b[39m",
     );
   });
 
@@ -334,7 +334,7 @@ describe("formatUsageStatusLine", () => {
     });
 
     expect(text).toBe(
-      "<dim>Usage: \x1b[39m<dim>5h \x1b[39m<success>####\x1b[39m<dim> \x1b[39m<dim>88%\x1b[39m",
+      "<dim>Usage: \x1b[39m<dim>5h \x1b[39m\x1b[38;2;34;197;94m####\x1b[39m<dim> \x1b[39m<dim>88%\x1b[39m",
     );
   });
 
