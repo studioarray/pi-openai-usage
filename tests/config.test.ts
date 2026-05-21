@@ -400,6 +400,47 @@ describe("configuration store", () => {
     }
   });
 
+  it("accepts widget, refresh interval, and hide-label menu patches without discarding JSON-only labels", () => {
+    const { root, cwd } = createTempProject();
+    try {
+      const configPath = join(cwd, ".pi", "extensions", CONFIG_BASENAME);
+      writeJson(configPath, {
+        refreshIntervalMs: 60_000,
+        display: { showLabel: true, label: "Tokens", separator: " · " },
+        widgets: {
+          fiveHour: { enabled: true, label: "short", mode: "bar-percent" },
+          sevenDay: { enabled: true, label: "week", mode: "percent" },
+          fiveHourReset: { enabled: true, label: "short reset", mode: "countdown" },
+          sevenDayReset: { enabled: false, label: "week reset", mode: "hidden" },
+        },
+      });
+
+      patchUsageConfig(configPath, {
+        refreshIntervalMs: 300_000,
+        display: { showLabel: false },
+        widgets: {
+          fiveHour: { enabled: false, mode: "hidden" },
+          sevenDay: { enabled: true, mode: "bar" },
+          fiveHourReset: { enabled: true, mode: "clock" },
+          sevenDayReset: { enabled: true, mode: "both" },
+        },
+      });
+
+      expect(readJson(configPath)).toEqual({
+        refreshIntervalMs: 300_000,
+        display: { showLabel: false, label: "Tokens", separator: " · " },
+        widgets: {
+          fiveHour: { enabled: false, label: "short", mode: "hidden" },
+          sevenDay: { enabled: true, label: "week", mode: "bar" },
+          fiveHourReset: { enabled: true, label: "short reset", mode: "clock" },
+          sevenDayReset: { enabled: true, label: "week reset", mode: "both" },
+        },
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("patches known config fields without discarding unknown fields", () => {
     const { root, cwd } = createTempProject();
     try {

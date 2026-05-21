@@ -30,6 +30,14 @@ export const MAX_REFRESH_INTERVAL_MS = APPROVED_REFRESH_INTERVALS_MS[
 
 export type ApprovedBarWidth = (typeof APPROVED_BAR_WIDTHS)[number];
 export type ApprovedRefreshIntervalMs = (typeof APPROVED_REFRESH_INTERVALS_MS)[number];
+export const APPROVED_REFRESH_INTERVAL_PRESETS = [
+  { label: "15s", value: 15_000 },
+  { label: "30s", value: 30_000 },
+  { label: "1m", value: 60_000 },
+  { label: "2m", value: 120_000 },
+  { label: "5m", value: 300_000 },
+  { label: "10m", value: 600_000 },
+] as const satisfies readonly { label: string; value: ApprovedRefreshIntervalMs }[];
 
 const WINDOW_WIDGET_MODES = ["percent", "bar", "bar-percent", "hidden"] as const;
 const RESET_WIDGET_MODES = ["countdown", "clock", "both", "hidden"] as const;
