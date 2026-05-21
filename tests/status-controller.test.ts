@@ -906,8 +906,9 @@ describe("usage status controller", () => {
 
     expect(harness.ctx.ui.setStatus).toHaveBeenCalledWith(
       "openai-usage",
-      "Usage: 5h: <success>88%\x1b[39m",
+      "<dim>Usage: \x1b[39m<dim>5h: \x1b[39m<success>88%\x1b[39m",
     );
+    expect(theme.fg).toHaveBeenCalledWith("dim", "Usage: ");
     expect(theme.fg).toHaveBeenCalledWith("success", "88%");
   });
 

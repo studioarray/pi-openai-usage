@@ -260,11 +260,11 @@ function publishUsageStatus(
 }
 
 function publishLoginRequiredStatus(ctx: StatusLineContext): void {
-  ctx.ui.setStatus(USAGE_STATUS_KEY, formatUsageLoginRequiredStatusLine());
+  ctx.ui.setStatus(USAGE_STATUS_KEY, formatUsageLoginRequiredStatusLine(ctx.ui.theme));
 }
 
 function publishUsageAuthFailedStatus(ctx: StatusLineContext): void {
-  ctx.ui.setStatus(USAGE_STATUS_KEY, formatUsageAuthFailedStatusLine());
+  ctx.ui.setStatus(USAGE_STATUS_KEY, formatUsageAuthFailedStatusLine(ctx.ui.theme));
 }
 
 function publishRefreshFailedStatus(ctx: StatusLineContext, statusText: string): void {
@@ -272,7 +272,7 @@ function publishRefreshFailedStatus(ctx: StatusLineContext, statusText: string):
 }
 
 function publishUsageRefreshFailedStatus(ctx: StatusLineContext): void {
-  ctx.ui.setStatus(USAGE_STATUS_KEY, formatUsageRefreshFailedStatusLine());
+  ctx.ui.setStatus(USAGE_STATUS_KEY, formatUsageRefreshFailedStatusLine(ctx.ui.theme));
 }
 
 function clearUsageStatus(ctx: StatusLineContext): void {

@@ -91,7 +91,7 @@ Result:
 5h: 88% | 7d: 73%
 ```
 
-To disable colors, set Color scheme to `none`.
+To use the neutral footer text colour instead of usage-coloured values, set Color scheme to `none`.
 
 ## Attribution
 

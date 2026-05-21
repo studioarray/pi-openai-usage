@@ -23,6 +23,7 @@ export type ColorizeProgressBarSegmentsOptions = {
   colors: ColorConfig;
   theme?: UsageColorTheme;
   isLimited?: boolean;
+  formatNeutralSegment?: (text: string) => string;
 };
 
 const FOREGROUND_RESET = "\x1b[39m";
@@ -102,14 +103,18 @@ export function colorizeUsageText(options: ColorizeUsageTextOptions): string {
 export function colorizeProgressBarSegments(options: ColorizeProgressBarSegmentsOptions): string {
   const uncoloredText = options.segments.map((segment) => segment.text).join("");
   if (!shouldApplyBarGradient(options.colors)) return uncoloredText;
-  if (options.theme === undefined || !isFiniteNumber(options.percent)) return uncoloredText;
+
+  const formatNeutralSegment = options.formatNeutralSegment ?? ((text: string) => text);
+  if (options.theme === undefined || !isFiniteNumber(options.percent)) {
+    return options.segments.map((segment) => formatNeutralSegment(segment.text)).join("");
+  }
 
   const cellCount = options.segments.length;
   if (cellCount === 0) return "";
 
   return options.segments
     .map((segment, index) => {
-      if (segment.kind === "empty") return segment.text;
+      if (segment.kind === "empty") return formatNeutralSegment(segment.text);
 
       const cellPercent = gradientCellPercent(
         index,
@@ -122,7 +127,9 @@ export function colorizeProgressBarSegments(options: ColorizeProgressBarSegments
         theme: options.theme,
         isLimited: options.isLimited,
       });
-      return color === undefined ? segment.text : applyForegroundColor(options.theme, color, segment.text);
+      return color === undefined
+        ? formatNeutralSegment(segment.text)
+        : applyForegroundColor(options.theme, color, segment.text);
     })
     .join("");
 }

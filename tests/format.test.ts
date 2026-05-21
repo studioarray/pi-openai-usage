@@ -254,7 +254,9 @@ describe("formatUsageStatusLine", () => {
       theme: fakeTheme(),
     });
 
-    expect(text).toBe("Usage: 5h: <success>88%\x1b[39m | 5h ↺ 42m");
+    expect(text).toBe(
+      "<dim>Usage: \x1b[39m<dim>5h: \x1b[39m<success>88%\x1b[39m<dim> | \x1b[39m<dim>5h ↺ 42m\x1b[39m",
+    );
   });
 
   it("colors only window widgets for widget target so reset widgets stay neutral", () => {
@@ -272,7 +274,9 @@ describe("formatUsageStatusLine", () => {
       theme: fakeTheme(),
     });
 
-    expect(text).toBe("Usage: <success>5h: 88%\x1b[39m | 5h ↺ 42m");
+    expect(text).toBe(
+      "<dim>Usage: \x1b[39m<success>5h: 88%\x1b[39m<dim> | \x1b[39m<dim>5h ↺ 42m\x1b[39m",
+    );
   });
 
   it("routes bar and percent color targets to only those window-widget spans", () => {
@@ -294,7 +298,9 @@ describe("formatUsageStatusLine", () => {
         }),
         theme: fakeTheme(),
       }),
-    ).toBe("Usage: 5h <success>####\x1b[39m 88%");
+    ).toBe(
+      "<dim>Usage: \x1b[39m<dim>5h \x1b[39m<success>####\x1b[39m<dim> \x1b[39m<dim>88%\x1b[39m",
+    );
 
     expect(
       formatUsageStatusLine({
@@ -306,10 +312,12 @@ describe("formatUsageStatusLine", () => {
         }),
         theme: fakeTheme(),
       }),
-    ).toBe("Usage: 5h #### <success>88%\x1b[39m");
+    ).toBe(
+      "<dim>Usage: \x1b[39m<dim>5h \x1b[39m<dim>####\x1b[39m<dim> \x1b[39m<success>88%\x1b[39m",
+    );
   });
 
-  it("keeps target value on bar-percent widgets away from the label", () => {
+  it("keeps target value on bar-percent widgets away from the label and percentage", () => {
     const text = formatUsageStatusLine({
       snapshot: SNAPSHOT,
       config: usageConfig({
@@ -325,7 +333,9 @@ describe("formatUsageStatusLine", () => {
       theme: fakeTheme(),
     });
 
-    expect(text).toBe("Usage: 5h <success>#### 88%\x1b[39m");
+    expect(text).toBe(
+      "<dim>Usage: \x1b[39m<dim>5h \x1b[39m<success>####\x1b[39m<dim> \x1b[39m<dim>88%\x1b[39m",
+    );
   });
 
   it("applies bar gradients only to filled and partial cells in bar window widgets", () => {
@@ -363,15 +373,15 @@ describe("formatUsageStatusLine", () => {
     });
 
     expect(text).toBe(
-      "Usage: 5h " +
+      "<dim>Usage: \x1b[39m<dim>5h \x1b[39m" +
         "\x1b[38;2;255;0;0mX\x1b[39m" +
         "\x1b[38;2;170;85;0mX\x1b[39m" +
         "\x1b[38;2;85;170;0m+\x1b[39m" +
-        "_ 63%",
+        "<dim>_\x1b[39m<dim> \x1b[39m<dim>63%\x1b[39m",
     );
   });
 
-  it("suppresses normal colors and bar gradients when target is none", () => {
+  it("dims normal colors and suppresses bar gradients when target is none", () => {
     const theme = fakeTheme();
     const text = formatUsageStatusLine({
       snapshot: SNAPSHOT,
@@ -393,11 +403,11 @@ describe("formatUsageStatusLine", () => {
       theme,
     });
 
-    expect(text).toBe("Usage: 5h #### 88%");
-    expect(theme.fg).not.toHaveBeenCalled();
+    expect(text).toBe("<dim>Usage: \x1b[39m<dim>5h #### 88%\x1b[39m");
+    expect(theme.fg).toHaveBeenCalledWith("dim", "5h #### 88%");
   });
 
-  it("leaves formatter output uncolored when the color scheme is none", () => {
+  it("dims formatter output when the color scheme is none", () => {
     const theme = fakeTheme();
     const text = formatUsageStatusLine({
       snapshot: SNAPSHOT,
@@ -413,8 +423,8 @@ describe("formatUsageStatusLine", () => {
       theme,
     });
 
-    expect(text).toBe("Usage: 5h: 88%");
-    expect(theme.fg).not.toHaveBeenCalled();
+    expect(text).toBe("<dim>Usage: \x1b[39m<dim>5h: \x1b[39m<dim>88%\x1b[39m");
+    expect(theme.fg).toHaveBeenCalledWith("dim", "88%");
   });
 
   it("formats auth failure, refresh failure, and refresh-failed marker states", () => {
@@ -432,7 +442,7 @@ describe("formatUsageStatusLine", () => {
 
   it("colors the refresh-failed marker as a warning when a theme is available", () => {
     expect(appendUsageRefreshFailureMarker("Usage: 88% left", fakeTheme())).toBe(
-      "Usage: 88% left (<warning>refresh failed\x1b[39m)",
+      "Usage: 88% left<dim> (\x1b[39m<warning>refresh failed\x1b[39m<dim>)\x1b[39m",
     );
   });
 });

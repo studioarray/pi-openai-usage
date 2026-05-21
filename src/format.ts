@@ -16,6 +16,7 @@ import type {
 import {
   colorizeProgressBarSegments,
   colorizeUsageText,
+  resolveUsageColor,
   type UsageColorTheme,
 } from "./color";
 import { renderProgressBarSegments, type ProgressBarSegment } from "./progress-bar";
@@ -56,19 +57,19 @@ export function formatUsageStatusLine(
   if (widgets.length === 0) return undefined;
   if (!widgets.some((widget) => widget.hasAvailableValue)) return undefined;
 
-  return toSingleVisibleLine(composeStatusLine(options.config, widgets));
+  return toSingleVisibleLine(composeStatusLine(options.config, widgets, options.theme));
 }
 
-export function formatUsageLoginRequiredStatusLine(): string {
-  return toSingleVisibleLine(LOGIN_REQUIRED_STATUS_TEXT);
+export function formatUsageLoginRequiredStatusLine(theme?: UsageColorTheme): string {
+  return toSingleVisibleLine(formatNeutralText(LOGIN_REQUIRED_STATUS_TEXT, theme));
 }
 
-export function formatUsageAuthFailedStatusLine(): string {
-  return toSingleVisibleLine(AUTH_FAILED_STATUS_TEXT);
+export function formatUsageAuthFailedStatusLine(theme?: UsageColorTheme): string {
+  return toSingleVisibleLine(formatNeutralText(AUTH_FAILED_STATUS_TEXT, theme));
 }
 
-export function formatUsageRefreshFailedStatusLine(): string {
-  return toSingleVisibleLine(REFRESH_FAILED_STATUS_TEXT);
+export function formatUsageRefreshFailedStatusLine(theme?: UsageColorTheme): string {
+  return toSingleVisibleLine(formatNeutralText(REFRESH_FAILED_STATUS_TEXT, theme));
 }
 
 export function appendUsageRefreshFailureMarker(
@@ -76,7 +77,7 @@ export function appendUsageRefreshFailureMarker(
   theme?: UsageColorTheme,
 ): string {
   const markerText = theme?.fg("warning", REFRESH_WARNING_TEXT) ?? REFRESH_WARNING_TEXT;
-  return `${statusText} (${markerText})`;
+  return `${statusText}${formatNeutralText(" (", theme)}${markerText}${formatNeutralText(")", theme)}`;
 }
 
 function formatUsageWidgets(options: FormatUsageStatusLineOptions): FormattedWidget[] {
@@ -91,10 +92,14 @@ function formatUsageWidgets(options: FormatUsageStatusLineOptions): FormattedWid
   ].filter((widget): widget is FormattedWidget => widget !== undefined);
 }
 
-function composeStatusLine(config: UsageConfig, widgets: readonly FormattedWidget[]): string {
-  const body = widgets.map((widget) => widget.text).join(config.display.separator);
+function composeStatusLine(
+  config: UsageConfig,
+  widgets: readonly FormattedWidget[],
+  theme?: UsageColorTheme,
+): string {
+  const body = widgets.map((widget) => widget.text).join(formatNeutralText(config.display.separator, theme));
   const label = formatStatusLabel(config);
-  return label === undefined ? body : `${label}: ${body}`;
+  return label === undefined ? body : `${formatNeutralText(`${label}: `, theme)}${body}`;
 }
 
 function formatStatusLabel(config: UsageConfig): string | undefined {
@@ -179,6 +184,8 @@ function formatColorableWindowWidget(parts: ColorableWindowWidgetParts): string 
   const barText = formatBarText(parts.barSegments);
   const valueText = joinWindowValueParts(barText, parts.percentText);
   const uncoloredText = `${parts.labelPrefix}${valueText}`;
+  const neutralLabelPrefix = formatNeutralText(parts.labelPrefix, parts.context.theme);
+  const neutralBarText = formatNeutralText(barText, parts.context.theme);
   const usesGradient = usesLayeredBarGradient(parts.context.colors, parts.barSegments);
 
   switch (parts.context.colors.target) {
@@ -189,15 +196,19 @@ function formatColorableWindowWidget(parts: ColorableWindowWidgetParts): string 
         true,
       )}`;
     case "value":
-      if (!usesGradient) return `${parts.labelPrefix}${colorizeWindowText(valueText, parts)}`;
-      return `${parts.labelPrefix}${formatColorableBar(parts)}${formatColorablePercentWithPrefix(parts, true)}`;
+      return `${neutralLabelPrefix}${formatColorableValue(parts)}`;
     case "bar":
-      return `${parts.labelPrefix}${formatColorableBar(parts)}${formatColorablePercentWithPrefix(parts, false)}`;
+      return `${neutralLabelPrefix}${formatColorableBar(parts)}${formatColorablePercentWithPrefix(parts, false)}`;
     case "percent":
-      return `${parts.labelPrefix}${barText}${formatColorablePercentWithPrefix(parts, true)}`;
+      return `${neutralLabelPrefix}${neutralBarText}${formatColorablePercentWithPrefix(parts, true)}`;
     case "none":
-      return uncoloredText;
+      return formatNeutralText(uncoloredText, parts.context.theme);
   }
+}
+
+function formatColorableValue(parts: ColorableWindowWidgetParts): string {
+  if (parts.barSegments === undefined) return colorizeWindowText(parts.percentText ?? "", parts);
+  return `${formatColorableBar(parts)}${formatColorablePercentWithPrefix(parts, false)}`;
 }
 
 function formatColorableBar(parts: ColorableWindowWidgetParts): string {
@@ -210,6 +221,7 @@ function formatColorableBar(parts: ColorableWindowWidgetParts): string {
       colors: parts.context.colors,
       theme: parts.context.theme,
       isLimited: parts.context.isLimited,
+      formatNeutralSegment: (text) => formatNeutralText(text, parts.context.theme),
     });
   }
 
@@ -222,11 +234,21 @@ function formatColorablePercentWithPrefix(
 ): string {
   if (parts.percentText === undefined) return "";
   const separator = parts.barSegments === undefined ? "" : " ";
-  const percentText = shouldColor ? colorizeWindowText(parts.percentText, parts) : parts.percentText;
-  return `${separator}${percentText}`;
+  const percentText = shouldColor
+    ? colorizeWindowText(parts.percentText, parts)
+    : formatNeutralText(parts.percentText, parts.context.theme);
+  return `${formatNeutralText(separator, parts.context.theme)}${percentText}`;
 }
 
 function colorizeWindowText(text: string, parts: ColorableWindowWidgetParts): string {
+  const color = resolveUsageColor({
+    percent: parts.percent,
+    colors: parts.context.colors,
+    theme: parts.context.theme,
+    isLimited: parts.context.isLimited,
+  });
+  if (color === undefined) return formatNeutralText(text, parts.context.theme);
+
   return colorizeUsageText({
     text,
     percent: parts.percent,
@@ -234,6 +256,11 @@ function colorizeWindowText(text: string, parts: ColorableWindowWidgetParts): st
     theme: parts.context.theme,
     isLimited: parts.context.isLimited,
   });
+}
+
+function formatNeutralText(text: string, theme?: UsageColorTheme): string {
+  if (theme === undefined || text.length === 0) return text;
+  return theme.fg("dim", text);
 }
 
 function formatBarText(segments: readonly ProgressBarSegment[] | undefined): string {
@@ -268,7 +295,7 @@ function formatResetWidget(
   if (!isWidgetVisible(config)) return undefined;
 
   return {
-    text: `${config.label} ${formatResetValue(seconds, config.mode, options)}`,
+    text: formatNeutralText(`${config.label} ${formatResetValue(seconds, config.mode, options)}`, options.theme),
     hasAvailableValue: isFiniteNumber(seconds),
   };
 }
