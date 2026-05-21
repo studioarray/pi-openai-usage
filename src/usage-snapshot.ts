@@ -1,11 +1,3 @@
-/**
- * Attribution:
- * Usage snapshot parsing behavior in this module is adapted from the Reference
- * Implementation (pi-better-openai), which is MIT-licensed. The adaptation is
- * scoped to usage-specific response parsing for usage windows, reset timing, and
- * compatibility with the known Spark additional-rate-limit bucket.
- */
-
 export type UsageWindow = {
   used_percent?: unknown;
   reset_after_seconds?: unknown;

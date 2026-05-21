@@ -1,11 +1,3 @@
-/**
- * Attribution:
- * Usage status formatting and reset rendering in this module is adapted from
- * usage-specific logic in the Reference Implementation (pi-better-openai),
- * which is MIT-licensed. Adaptation is intentionally limited to usage widgets,
- * theme/color targets, and textual status composition for this extension.
- */
-
 import type {
   BarConfig,
   ColorConfig,

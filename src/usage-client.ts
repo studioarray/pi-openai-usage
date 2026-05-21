@@ -1,11 +1,3 @@
-/**
- * Attribution:
- * Usage endpoint request behavior in this module is adapted from the Reference
- * Implementation (pi-better-openai), which is MIT-licensed. Scope is intentionally
- * limited to Codex usage fetching, timeout/abort handling, and status-code/auth
- * classification for this package's usage-only feature set.
- */
-
 export const USAGE_ENDPOINT = "https://chatgpt.com/backend-api/wham/usage";
 export const DEFAULT_USAGE_REQUEST_TIMEOUT_MS = 10_000;
 

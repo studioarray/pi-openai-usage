@@ -1,11 +1,3 @@
-/**
- * Attribution:
- * Settings command structure is adapted from usage-specific patterns of the
- * Reference Implementation (pi-better-openai), which is MIT-licensed. The ported
- * scope is intentionally limited to usage configuration, diagnostics, and
- * operational status for this extension.
- */
-
 import type {
   ExtensionAPI,
   ExtensionCommandContext,

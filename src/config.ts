@@ -1,12 +1,3 @@
-/**
- * Attribution:
- * Configuration loading, normalization, and partial-write behavior here is adapted
- * from usage-focused portions of the Reference Implementation (pi-better-openai),
- * retained under MIT-licensed terms. The implementation intentionally keeps scope to usage
- * settings only (project/global layering, safe fallbacks, unknown field preservation,
- * and focused setting patches).
- */
-
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
