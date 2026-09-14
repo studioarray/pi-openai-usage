@@ -22,10 +22,12 @@ function rawUsageResponse(options: { fiveHourUsedPercent?: number } = {}): unkno
   return {
     rate_limit: {
       primary_window: {
+        limit_window_seconds: 18_000,
         used_percent: options.fiveHourUsedPercent ?? 12,
         reset_after_seconds: 300,
       },
       secondary_window: {
+        limit_window_seconds: 604_800,
         used_percent: 44,
         reset_after_seconds: 600,
       },
@@ -36,15 +38,31 @@ function rawUsageResponse(options: { fiveHourUsedPercent?: number } = {}): unkno
 function rawUsageResponseWithSparkBucket(): unknown {
   return {
     rate_limit: {
-      primary_window: { used_percent: 12, reset_after_seconds: 300 },
-      secondary_window: { used_percent: 44, reset_after_seconds: 600 },
+      primary_window: {
+        limit_window_seconds: 18_000,
+        used_percent: 12,
+        reset_after_seconds: 300,
+      },
+      secondary_window: {
+        limit_window_seconds: 604_800,
+        used_percent: 44,
+        reset_after_seconds: 600,
+      },
     },
     additional_rate_limits: {
       spark: {
         limit_name: "GPT-5.3-Codex-Spark",
         rate_limit: {
-          primary_window: { used_percent: 40, reset_after_seconds: 900 },
-          secondary_window: { used_percent: 30, reset_after_seconds: 1_200 },
+          primary_window: {
+            limit_window_seconds: 18_000,
+            used_percent: 40,
+            reset_after_seconds: 900,
+          },
+          secondary_window: {
+            limit_window_seconds: 604_800,
+            used_percent: 30,
+            reset_after_seconds: 1_200,
+          },
         },
       },
     },

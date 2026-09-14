@@ -1,4 +1,5 @@
 export type UsageWindow = {
+  limit_window_seconds?: unknown;
   used_percent?: unknown;
   reset_after_seconds?: unknown;
   reset_at?: unknown;
@@ -31,6 +32,8 @@ export type ParseUsageSnapshotOptions = {
 
 const SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const SPARK_LIMIT_NAME = "GPT-5.3-Codex-Spark";
+const FIVE_HOUR_WINDOW_SECONDS = 18_000;
+const SEVEN_DAY_WINDOW_SECONDS = 604_800;
 const MILLISECONDS_EPOCH_THRESHOLD = 100_000_000_000;
 
 export function parseUsageSnapshot(
@@ -44,16 +47,24 @@ export function parseUsageSnapshot(
       ? findSparkRateLimitBucket(response) ?? rootBucket
       : rootBucket;
 
-  const primaryWindow = asRecord(bucket?.primary_window);
-  const secondaryWindow = asRecord(bucket?.secondary_window);
+  const windows = [asRecord(bucket?.primary_window), asRecord(bucket?.secondary_window)];
+  const fiveHourWindow = findWindowByDuration(windows, FIVE_HOUR_WINDOW_SECONDS);
+  const sevenDayWindow = findWindowByDuration(windows, SEVEN_DAY_WINDOW_SECONDS);
 
   return {
-    fiveHourLeftPercent: usedToRemainingPercent(primaryWindow?.used_percent),
-    sevenDayLeftPercent: usedToRemainingPercent(secondaryWindow?.used_percent),
-    fiveHourResetInSeconds: resetInSeconds(primaryWindow, options.nowMs),
-    sevenDayResetInSeconds: resetInSeconds(secondaryWindow, options.nowMs),
+    fiveHourLeftPercent: usedToRemainingPercent(fiveHourWindow?.used_percent),
+    sevenDayLeftPercent: usedToRemainingPercent(sevenDayWindow?.used_percent),
+    fiveHourResetInSeconds: resetInSeconds(fiveHourWindow, options.nowMs),
+    sevenDayResetInSeconds: resetInSeconds(sevenDayWindow, options.nowMs),
     isLimited: bucket?.allowed === false || bucket?.limit_reached === true,
   };
+}
+
+function findWindowByDuration(
+  windows: readonly (Record<string, unknown> | undefined)[],
+  durationSeconds: number,
+): Record<string, unknown> | undefined {
+  return windows.find((window) => window?.limit_window_seconds === durationSeconds);
 }
 
 function normalizeRateLimitBucket(value: unknown): RateLimitBucket | undefined {

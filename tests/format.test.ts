@@ -202,7 +202,7 @@ describe("formatUsageStatusLine", () => {
     expect(text).toBeUndefined();
   });
 
-  it("renders unavailable values safely when another widget has displayable usage", () => {
+  it("omits unavailable widgets when another widget has displayable usage", () => {
     const text = formatUsageStatusLine({
       snapshot: {
         ...UNAVAILABLE_SNAPSHOT,
@@ -217,10 +217,10 @@ describe("formatUsageStatusLine", () => {
       }),
     });
 
-    expect(text).toBe("Usage: 5h: 88% | 7d: -- | 5h ↺ -- | 7d ↺ --");
+    expect(text).toBe("Usage: 5h: 88%");
   });
 
-  it("renders unavailable bar values safely when another widget has displayable usage", () => {
+  it("omits an unavailable bar widget when another window is available", () => {
     const text = formatUsageStatusLine({
       snapshot: {
         ...UNAVAILABLE_SNAPSHOT,
@@ -236,7 +236,7 @@ describe("formatUsageStatusLine", () => {
       }),
     });
 
-    expect(text).toBe("Usage: 5h ░░░░░░░░░░ | 7d: 73%");
+    expect(text).toBe("Usage: 7d: 73%");
   });
 
   it("colors window values from the injected theme while leaving reset widgets neutral", () => {

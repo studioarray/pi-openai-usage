@@ -31,7 +31,6 @@ export type FormatUsageStatusLineOptions = {
 
 type FormattedWidget = {
   text: string;
-  hasAvailableValue: boolean;
 };
 
 /**
@@ -47,7 +46,6 @@ export function formatUsageStatusLine(
 
   const widgets = formatUsageWidgets(options);
   if (widgets.length === 0) return undefined;
-  if (!widgets.some((widget) => widget.hasAvailableValue)) return undefined;
 
   return toSingleVisibleLine(composeStatusLine(options.config, widgets, options.theme));
 }
@@ -106,11 +104,10 @@ function formatWindowWidget(
   config: WindowWidgetConfig,
   options: FormatUsageStatusLineOptions,
 ): FormattedWidget | undefined {
-  if (!isWidgetVisible(config)) return undefined;
+  if (!isWidgetVisible(config) || !isFiniteNumber(percent)) return undefined;
 
   return {
     text: formatWindowWidgetText(percent, config, options),
-    hasAvailableValue: isFiniteNumber(percent),
   };
 }
 
@@ -284,11 +281,10 @@ function formatResetWidget(
   config: ResetWidgetConfig,
   options: FormatUsageStatusLineOptions,
 ): FormattedWidget | undefined {
-  if (!isWidgetVisible(config)) return undefined;
+  if (!isWidgetVisible(config) || !isFiniteNumber(seconds)) return undefined;
 
   return {
     text: formatNeutralText(`${config.label} ${formatResetValue(seconds, config.mode, options)}`, options.theme),
-    hasAvailableValue: isFiniteNumber(seconds),
   };
 }
 
